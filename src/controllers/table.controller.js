@@ -1,12 +1,10 @@
 
-const { pool } = require('../config/db');
 const { getCapacityRange } = require('../utils/settings');
+const tableModel = require('../models/table.model');
 
 async function list(req, res, next) {
   try {
-    const [rows] = await pool.query(
-      'SELECT id, table_number, capacity, status FROM restaurant_tables ORDER BY table_number'
-    );
+    const rows = await tableModel.findAll();
     res.json({ tables: rows });
   } catch (err) {
     next(err);
@@ -16,7 +14,7 @@ async function list(req, res, next) {
 async function getById(req, res, next) {
   try {
     const { id } = req.params;
-    const [rows] = await pool.query('SELECT * FROM restaurant_tables WHERE id = ?', [id]);
+    const rows = await tableModel.findById(id);
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Không tìm thấy bàn.' });
     }
@@ -39,10 +37,7 @@ async function create(req, res, next) {
       return res.status(400).json({ message: `capacity phải nằm trong khoảng [${min}, ${max}].` });
     }
 
-    const [result] = await pool.query(
-      `INSERT INTO restaurant_tables (table_number, capacity, status) VALUES (?, ?, 'trong')`,
-      [table_number, capacity]
-    );
+    const [result] = await tableModel.create(table_number, capacity);
 
     res.status(201).json({ id: result.insertId, table_number, capacity, status: 'trong' });
   } catch (err) {
@@ -64,10 +59,7 @@ async function update(req, res, next) {
       return res.status(400).json({ message: `capacity phải nằm trong khoảng [${min}, ${max}].` });
     }
 
-    const [result] = await pool.query(
-      'UPDATE restaurant_tables SET table_number = ?, capacity = ? WHERE id = ?',
-      [table_number, capacity, id]
-    );
+    const [result] = await tableModel.update(id, table_number, capacity);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ message: 'Không tìm thấy bàn.' });
@@ -82,7 +74,7 @@ async function remove(req, res, next) {
   try {
     const { id } = req.params;
 
-    const [rows] = await pool.query('SELECT status FROM restaurant_tables WHERE id = ?', [id]);
+    const rows = await tableModel.findStatusById(id);
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Không tìm thấy bàn.' });
     }
@@ -90,7 +82,7 @@ async function remove(req, res, next) {
       return res.status(409).json({ message: 'Chỉ có thể xoá bàn đang ở trạng thái "trong".' });
     }
 
-    await pool.query('DELETE FROM restaurant_tables WHERE id = ?', [id]);
+    await tableModel.remove(id);
     res.json({ message: 'Đã xoá bàn.' });
   } catch (err) {
     next(err);

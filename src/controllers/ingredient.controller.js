@@ -1,9 +1,9 @@
 
-const { pool } = require('../config/db');
+const ingredientModel = require('../models/ingredient.model');
 
 async function list(req, res, next) {
   try {
-    const [rows] = await pool.query('SELECT id, name FROM ingredients ORDER BY name ASC');
+    const [rows] = await ingredientModel.findAll();
     res.json({ ingredients: rows });
   } catch (err) {
     next(err);
@@ -17,12 +17,12 @@ async function create(req, res, next) {
       return res.status(400).json({ message: 'Thiếu tên nguyên liệu.' });
     }
 
-    const [existing] = await pool.query('SELECT id FROM ingredients WHERE name = ?', [name.trim()]);
+    const [existing] = await ingredientModel.findByName(name.trim());
     if (existing.length > 0) {
       return res.status(409).json({ message: 'Nguyên liệu này đã tồn tại.' });
     }
 
-    const [result] = await pool.query('INSERT INTO ingredients (name) VALUES (?)', [name.trim()]);
+    const [result] = await ingredientModel.create(name.trim());
     res.status(201).json({ id: result.insertId, name: name.trim() });
   } catch (err) {
     next(err);
@@ -37,7 +37,7 @@ async function update(req, res, next) {
       return res.status(400).json({ message: 'Thiếu tên nguyên liệu.' });
     }
 
-    const [result] = await pool.query('UPDATE ingredients SET name = ? WHERE id = ?', [name.trim(), id]);
+    const [result] = await ingredientModel.update(id, name.trim());
     if (result.affectedRows === 0) {
       return res.status(404).json({ message: 'Không tìm thấy nguyên liệu.' });
     }
@@ -50,7 +50,7 @@ async function update(req, res, next) {
 async function remove(req, res, next) {
   try {
     const { id } = req.params;
-    const [result] = await pool.query('DELETE FROM ingredients WHERE id = ?', [id]);
+    const [result] = await ingredientModel.remove(id);
     if (result.affectedRows === 0) {
       return res.status(404).json({ message: 'Không tìm thấy nguyên liệu.' });
     }

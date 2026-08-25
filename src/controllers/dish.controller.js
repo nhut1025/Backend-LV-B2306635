@@ -1,13 +1,9 @@
 
 const { pool } = require('../config/db');
+const dishModel = require('../models/dish.model');
 
 async function getExcludedIngredientIds(userId) {
-  if (!userId) return [];
-  const [rows] = await pool.query(
-    'SELECT ingredient_id FROM user_excluded_ingredients WHERE user_id = ?',
-    [userId]
-  );
-  return rows.map((r) => r.ingredient_id);
+  return dishModel.findExcludedIngredientIds(userId);
 }
 
 async function list(req, res, next) {
@@ -16,26 +12,7 @@ async function list(req, res, next) {
     const userId = req.user ? req.user.id : null;
     const excludedIds = await getExcludedIngredientIds(userId);
 
-    let sql = 'SELECT id, name, description, price, category, image_url, is_available FROM dishes WHERE 1=1';
-    const params = [];
-
-    if (category) {
-      sql += ' AND category = ?';
-      params.push(category);
-    }
-    if (available_only === 'true') {
-      sql += ' AND is_available = TRUE';
-    }
-    if (excludedIds.length > 0) {
-      sql += ` AND id NOT IN (
-        SELECT dish_id FROM dish_ingredients WHERE ingredient_id IN (${excludedIds.map(() => '?').join(',')})
-      )`;
-      params.push(...excludedIds);
-    }
-
-    sql += ' ORDER BY category, name';
-
-    const [rows] = await pool.query(sql, params);
+    const [rows] = await dishModel.findAll(category, available_only === 'true', excludedIds);
     res.json({ dishes: rows });
   } catch (err) {
     next(err);
@@ -47,18 +24,14 @@ async function getById(req, res, next) {
     const { id } = req.params;
     const userId = req.user ? req.user.id : null;
 
-    const [dishRows] = await pool.query('SELECT * FROM dishes WHERE id = ?', [id]);
+    const { dishResult, ingredientResult } = await dishModel.findById(id);
+    const [dishRows] = dishResult;
     if (dishRows.length === 0) {
       return res.status(404).json({ message: 'Không tìm thấy món ăn.' });
     }
     const dish = dishRows[0];
 
-    const [ingredientRows] = await pool.query(
-      `SELECT i.id, i.name FROM ingredients i
-       JOIN dish_ingredients di ON di.ingredient_id = i.id
-       WHERE di.dish_id = ?`,
-      [id]
-    );
+    const [ingredientRows] = ingredientResult;
     dish.ingredients = ingredientRows;
 
     if (userId) {
@@ -87,17 +60,11 @@ async function create(req, res, next) {
 
     await conn.beginTransaction();
 
-    const [result] = await conn.query(
-      `INSERT INTO dishes (name, description, price, category, image_url)
-       VALUES (?, ?, ?, ?, ?)`,
-      [name, description || null, price, category || null, image_url || null]
-    );
+    const result = await dishModel.create(conn, {
+      name, description: description || null, price, category: category || null,
+      image_url: image_url || null, ingredient_ids: Array.isArray(ingredient_ids) ? ingredient_ids : [],
+    });
     const dishId = result.insertId;
-
-    if (Array.isArray(ingredient_ids) && ingredient_ids.length > 0) {
-      const values = ingredient_ids.map((ingId) => [dishId, ingId]);
-      await conn.query('INSERT INTO dish_ingredients (dish_id, ingredient_id) VALUES ?', [values]);
-    }
 
     await conn.commit();
     res.status(201).json({ id: dishId, name, price, category, image_url, ingredient_ids: ingredient_ids || [] });
@@ -117,23 +84,14 @@ async function update(req, res, next) {
 
     await conn.beginTransaction();
 
-    const [result] = await conn.query(
-      `UPDATE dishes SET name = ?, description = ?, price = ?, category = ?, image_url = ?
-       WHERE id = ?`,
-      [name, description || null, price, category || null, image_url || null, id]
-    );
+    const result = await dishModel.update(conn, id, {
+      name, description: description || null, price, category: category || null,
+      image_url: image_url || null, ingredient_ids,
+    });
 
     if (result.affectedRows === 0) {
       await conn.rollback();
       return res.status(404).json({ message: 'Không tìm thấy món ăn.' });
-    }
-
-    if (Array.isArray(ingredient_ids)) {
-      await conn.query('DELETE FROM dish_ingredients WHERE dish_id = ?', [id]);
-      if (ingredient_ids.length > 0) {
-        const values = ingredient_ids.map((ingId) => [id, ingId]);
-        await conn.query('INSERT INTO dish_ingredients (dish_id, ingredient_id) VALUES ?', [values]);
-      }
     }
 
     await conn.commit();
@@ -155,7 +113,7 @@ async function toggleAvailability(req, res, next) {
       return res.status(400).json({ message: 'is_available phải là true/false.' });
     }
 
-    const [result] = await pool.query('UPDATE dishes SET is_available = ? WHERE id = ?', [is_available, id]);
+    const [result] = await dishModel.setAvailability(id, is_available);
     if (result.affectedRows === 0) {
       return res.status(404).json({ message: 'Không tìm thấy món ăn.' });
     }
@@ -168,7 +126,7 @@ async function toggleAvailability(req, res, next) {
 async function remove(req, res, next) {
   try {
     const { id } = req.params;
-    const [result] = await pool.query('DELETE FROM dishes WHERE id = ?', [id]);
+    const [result] = await dishModel.remove(id);
     if (result.affectedRows === 0) {
       return res.status(404).json({ message: 'Không tìm thấy món ăn.' });
     }
