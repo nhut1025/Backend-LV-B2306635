@@ -9,7 +9,7 @@ async function findExcludedIngredientIds(userId) {
   return rows.map((row) => row.ingredient_id);
 }
 
-async function findAll(category, availableOnly, excludedIds) {
+function findAll(category, availableOnly) {
   let sql = 'SELECT id, name, description, price, category, image_url, is_available FROM dishes WHERE 1=1';
   const params = [];
   if (category) {
@@ -17,10 +17,6 @@ async function findAll(category, availableOnly, excludedIds) {
     params.push(category);
   }
   if (availableOnly) sql += ' AND is_available = TRUE';
-  if (excludedIds.length > 0) {
-    sql += ` AND id NOT IN (SELECT dish_id FROM dish_ingredients WHERE ingredient_id IN (${excludedIds.map(() => '?').join(',')}))`;
-    params.push(...excludedIds);
-  }
   sql += ' ORDER BY category, name';
   return pool.query(sql, params);
 }

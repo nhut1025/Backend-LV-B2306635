@@ -10,9 +10,8 @@ async function list(req, res, next) {
   try {
     const { category, available_only } = req.query;
     const userId = req.user ? req.user.id : null;
-    const excludedIds = await getExcludedIngredientIds(userId);
 
-    const [rows] = await dishModel.findAll(category, available_only === 'true', excludedIds);
+    const [rows] = await dishModel.findAll(category, available_only === 'true');
     res.json({ dishes: rows });
   } catch (err) {
     next(err);
@@ -44,6 +43,13 @@ async function getById(req, res, next) {
   } catch (err) {
     next(err);
   }
+}
+
+function uploadImage(req, res) {
+  if (!req.file) {
+    return res.status(400).json({ message: 'Vui lòng chọn một file hình ảnh hợp lệ.' });
+  }
+  return res.status(201).json({ image_url: `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}` });
 }
 
 async function create(req, res, next) {
@@ -81,6 +87,13 @@ async function update(req, res, next) {
   try {
     const { id } = req.params;
     const { name, description, price, category, image_url, ingredient_ids } = req.body;
+
+    if (!name || price === undefined || price === null) {
+      return res.status(400).json({ message: 'Thiếu name hoặc price.' });
+    }
+    if (isNaN(price) || Number(price) < 0) {
+      return res.status(400).json({ message: 'price không hợp lệ.' });
+    }
 
     await conn.beginTransaction();
 
@@ -136,4 +149,4 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, toggleAvailability, remove };
+module.exports = { list, getById, uploadImage, create, update, toggleAvailability, remove };
