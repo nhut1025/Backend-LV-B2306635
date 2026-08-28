@@ -26,7 +26,8 @@ async function findById(id) {
   const ingredientResult = await pool.query(
     `SELECT i.id, i.name FROM ingredients i
      JOIN dish_ingredients di ON di.ingredient_id = i.id
-     WHERE di.dish_id = ?`,
+     JOIN dishes d ON d.id = di.dish_id
+     WHERE d.id = ?`,
     [id]
   );
   return { dishResult, ingredientResult };

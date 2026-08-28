@@ -9,7 +9,6 @@ async function getExcludedIngredientIds(userId) {
 async function list(req, res, next) {
   try {
     const { category, available_only } = req.query;
-    const userId = req.user ? req.user.id : null;
 
     const [rows] = await dishModel.findAll(category, available_only === 'true');
     res.json({ dishes: rows });
@@ -32,6 +31,7 @@ async function getById(req, res, next) {
 
     const [ingredientRows] = ingredientResult;
     dish.ingredients = ingredientRows;
+    dish.contains_excluded_ingredient = false;
 
     if (userId) {
       const excludedIds = await getExcludedIngredientIds(userId);
