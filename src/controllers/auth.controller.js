@@ -195,11 +195,11 @@ async function resetPassword(req, res, next) {
     if (password.length < 6) return res.status(400).json({ message: 'Password phải có ít nhất 6 ký tự.' });
 
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-    const [rows] = await authModel.findByValidResetToken(tokenHash);
-    if (rows.length === 0) return res.status(400).json({ message: 'Token không hợp lệ hoặc đã hết hạn.' });
-
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-    await authModel.updatePasswordAndClearResetToken(rows[0].id, passwordHash);
+    const [result] = await authModel.updatePasswordAndClearResetToken(tokenHash, passwordHash);
+    if (result.affectedRows === 0) {
+      return res.status(400).json({ message: 'Token không hợp lệ hoặc đã hết hạn.' });
+    }
     return res.json({ message: 'Đổi mật khẩu thành công. Bạn có thể đăng nhập lại.' });
   } catch (err) {
     next(err);

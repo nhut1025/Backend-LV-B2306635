@@ -67,11 +67,11 @@ async function findByValidResetToken(tokenHash) {
   );
 }
 
-async function updatePasswordAndClearResetToken(userId, passwordHash) {
+async function updatePasswordAndClearResetToken(tokenHash, passwordHash) {
   return pool.query(
     `UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL
-     WHERE id = ?`,
-    [passwordHash, userId]
+     WHERE reset_token = ? AND reset_token_expires > NOW()`,
+    [passwordHash, tokenHash]
   );
 }
 
