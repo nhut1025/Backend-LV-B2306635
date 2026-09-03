@@ -28,7 +28,7 @@ router.get('/:id', optionalAuthMiddleware, ctrl.getById);
 router.post('/upload-image', authMiddleware, requireRole('manager'), imageUpload.single('image'), ctrl.uploadImage);
 router.post('/', authMiddleware, requireRole('manager'), ctrl.create);
 router.put('/:id', authMiddleware, requireRole('manager'), ctrl.update);
-router.patch('/:id/availability', authMiddleware, requireRole('staff', 'kitchen'), ctrl.toggleAvailability);
+router.patch('/:id/availability', authMiddleware, requireRole('phuc_vu', 'kitchen'), ctrl.toggleAvailability);
 router.delete('/:id', authMiddleware, requireRole('manager'), ctrl.remove);
 
 module.exports = router;

@@ -1,16 +1,15 @@
 const { pool } = require('../config/db');
 
-// Thêm is_verified vào SELECT — login cần biết user đã xác thực email chưa.
 async function findByEmail(email) {
   return pool.query(
-    'SELECT id, full_name, email, password_hash, role, is_verified FROM users WHERE email = ?',
+    'SELECT id, full_name, email, password_hash, role, is_active, is_verified FROM users WHERE email = ?',
     [email]
   );
 }
 
 async function findById(id) {
   return pool.query(
-    'SELECT id, full_name, email, phone, role, avatar_url, is_verified, created_at FROM users WHERE id = ?',
+    'SELECT id, full_name, email, phone, role, avatar_url, is_active, is_verified, created_at FROM users WHERE id = ?',
     [id]
   );
 }
@@ -77,9 +76,40 @@ async function updatePasswordAndClearResetToken(tokenHash, passwordHash) {
 
 async function createInternalUser(fullName, email, phone, passwordHash, role) {
   return pool.query(
-    `INSERT INTO users (full_name, email, phone, password_hash, role, is_verified)
-     VALUES (?, ?, ?, ?, ?, TRUE)`,
+    `INSERT INTO users (full_name, email, phone, password_hash, role, is_active, is_verified)
+     VALUES (?, ?, ?, ?, ?, TRUE, TRUE)`,
     [fullName, email, phone, passwordHash, role]
+  );
+}
+
+async function findStaffUsers() {
+  return pool.query(
+    `SELECT id, full_name, email, phone, role, is_active, is_verified, created_at
+     FROM users
+     WHERE role IN ('phuc_vu', 'thu_ngan', 'kitchen', 'manager')
+     ORDER BY created_at DESC`
+  );
+}
+
+async function findStaffById(id) {
+  return pool.query(
+    `SELECT id, full_name, email, phone, role, is_active, is_verified, created_at
+     FROM users WHERE id = ? AND role IN ('phuc_vu', 'thu_ngan', 'kitchen', 'manager')`,
+    [id]
+  );
+}
+
+async function updateStaffById(id, fullName, phone, role) {
+  return pool.query(
+    'UPDATE users SET full_name = ?, phone = ?, role = ? WHERE id = ? AND role IN (\'phuc_vu\', \'thu_ngan\', \'kitchen\', \'manager\')',
+    [fullName, phone, role, id]
+  );
+}
+
+async function toggleStaffActive(id, isActive) {
+  return pool.query(
+    'UPDATE users SET is_active = ? WHERE id = ? AND role IN (\'phuc_vu\', \'thu_ngan\', \'kitchen\', \'manager\')',
+    [isActive, id]
   );
 }
 
@@ -94,4 +124,8 @@ module.exports = {
   findByValidResetToken,
   updatePasswordAndClearResetToken,
   createInternalUser,
+  findStaffUsers,
+  findStaffById,
+  updateStaffById,
+  toggleStaffActive,
 };

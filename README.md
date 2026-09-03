@@ -22,7 +22,14 @@ Authentication endpoints are mounted under `/api/auth`:
 - `POST /reset-password` with `{ "token": "...", "password": "..." }`
 
 Managers can create internal accounts with `POST /api/users/staff` using a
-Bearer token and `{ "full_name", "email", "password", "role": "staff|kitchen" }`.
+Bearer token and `{ "full_name", "email", "password", "role": "phuc_vu|thu_ngan|kitchen|manager" }`.
+
+Manager staff endpoints:
+
+- `GET /api/users/staff`
+- `POST /api/users/staff`
+- `PUT /api/users/staff/:id`
+- `PATCH /api/users/staff/:id/active` with `{ "is_active": true|false }`
 
 For real email delivery, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
 `SMTP_PASS`, and `MAIL_FROM` in `.env`. Without SMTP settings, links are

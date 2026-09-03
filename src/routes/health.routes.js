@@ -13,7 +13,7 @@ router.get('/health', async (req, res, next) => {
   }
 });
 
-router.get('/health/staff-only', authMiddleware, requireRole('staff'), (req, res) => {
+router.get('/health/staff-only', authMiddleware, requireRole('phuc_vu', 'thu_ngan', 'kitchen', 'manager'), (req, res) => {
   res.json({ status: 'ok', message: `Xin chào NV #${req.user.id}, bạn có quyền truy cập.` });
 });
 

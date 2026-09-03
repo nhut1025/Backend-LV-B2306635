@@ -75,6 +75,13 @@ async function login(req, res, next) {
       return res.status(401).json({ message: 'Email hoặc mật khẩu không đúng.' });
     }
 
+    if (user.is_active === false || user.is_active === 0) {
+      return res.status(403).json({
+        message: 'Tài khoản đã bị khóa. Vui lòng liên hệ quản lý.',
+        code: 'ACCOUNT_DISABLED',
+      });
+    }
+
     // Chặn login nếu chưa xác thực email — kiểm tra SAU khi verify đúng password,
     // để không lộ thông tin "email này tồn tại" cho người không biết mật khẩu.
     if (!user.is_verified) {

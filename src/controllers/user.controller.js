@@ -75,8 +75,9 @@ async function createStaff(req, res, next) {
     if (!full_name || !email || !password || !role) {
       return res.status(400).json({ message: 'Thiếu full_name, email, password hoặc role.' });
     }
-    if (!['staff', 'kitchen'].includes(role)) {
-      return res.status(400).json({ message: 'role chỉ có thể là staff hoặc kitchen.' });
+    const allowedRoles = ['phuc_vu', 'thu_ngan', 'kitchen', 'manager'];
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({ message: 'role chỉ có thể là phuc_vu, thu_ngan, kitchen hoặc manager.' });
     }
     if (password.length < 6) {
       return res.status(400).json({ message: 'Password phải có ít nhất 6 ký tự.' });
@@ -92,11 +93,73 @@ async function createStaff(req, res, next) {
 
     return res.status(201).json({
       message: 'Đã tạo tài khoản nhân sự.',
-      user: { id: result.insertId, full_name: full_name.trim(), email, phone: phone || null, role },
+      user: { id: result.insertId, full_name: full_name.trim(), email, phone: phone || null, role, is_active: true },
     });
   } catch (err) {
     next(err);
   }
 }
 
-module.exports = { getProfile, updateProfile, getExcludedIngredients, setExcludedIngredients, createStaff };
+async function getStaffList(req, res, next) {
+  try {
+    const [rows] = await authModel.findStaffUsers();
+    res.json({ staff: rows });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updateStaff(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { full_name, phone, role } = req.body;
+
+    if (!full_name || !full_name.trim()) {
+      return res.status(400).json({ message: 'Thiếu full_name.' });
+    }
+    const allowedRoles = ['phuc_vu', 'thu_ngan', 'kitchen', 'manager'];
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({ message: 'role không hợp lệ.' });
+    }
+
+    const [result] = await authModel.updateStaffById(id, full_name.trim(), phone || null, role);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy tài khoản nhân sự.' });
+    }
+
+    res.json({ message: 'Đã cập nhật thông tin nhân sự.' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function toggleStaffActive(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { is_active } = req.body;
+
+    if (typeof is_active !== 'boolean') {
+      return res.status(400).json({ message: 'is_active phải là true hoặc false.' });
+    }
+
+    const [result] = await authModel.toggleStaffActive(id, is_active);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy tài khoản nhân sự.' });
+    }
+
+    res.json({ message: `Đã ${is_active ? 'mở khóa' : 'khóa'} tài khoản nhân sự.` });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  getProfile,
+  updateProfile,
+  getExcludedIngredients,
+  setExcludedIngredients,
+  createStaff,
+  getStaffList,
+  updateStaff,
+  toggleStaffActive,
+};

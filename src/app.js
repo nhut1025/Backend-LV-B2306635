@@ -9,6 +9,7 @@ const ingredientRoutes = require('./routes/ingredient.routes');
 const dishRoutes = require('./routes/dish.routes');
 const tableRoutes = require('./routes/table.routes');
 const userRoutes = require('./routes/user.routes');
+const reservationRoutes = require('./routes/reservation.routes');
 const { notFoundHandler, errorHandler } = require('./middlewares/error.middleware');
 
 const app = express();
@@ -24,6 +25,7 @@ app.use('/api/ingredients', ingredientRoutes);
 app.use('/api/dishes', dishRoutes);
 app.use('/api/tables', tableRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/reservations', reservationRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
