@@ -142,6 +142,25 @@ async function toggleStaffActive(req, res, next) {
       return res.status(400).json({ message: 'is_active phải là true hoặc false.' });
     }
 
+    // Bảo vệ 1: không cho tự khóa chính mình (tránh tự nhốt mình ngoài hệ thống)
+    if (Number(id) === req.user.id && is_active === false) {
+      return res.status(400).json({ message: 'Không thể tự khóa tài khoản của chính mình.' });
+    }
+
+    // Bảo vệ 2: nếu đang khóa 1 tài khoản manager, đảm bảo vẫn còn ít nhất 1 manager khác đang hoạt động
+    if (is_active === false) {
+      const [target] = await authModel.findStaffById(id);
+      if (target.length > 0 && target[0].role === 'manager') {
+        const [activeManagers] = await authModel.countActiveManagers();
+        const activeCount = activeManagers[0].count;
+        if (activeCount <= 1) {
+          return res.status(400).json({
+            message: 'Không thể khóa vì đây là quản lý đang hoạt động cuối cùng trong hệ thống.',
+          });
+        }
+      }
+    }
+
     const [result] = await authModel.toggleStaffActive(id, is_active);
     if (result.affectedRows === 0) {
       return res.status(404).json({ message: 'Không tìm thấy tài khoản nhân sự.' });

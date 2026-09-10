@@ -1,12 +1,14 @@
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
 const authModel = require('../models/auth.model');
 const { sendVerificationEmail, sendPasswordResetEmail } = require('../utils/mailer');
 
 const SALT_ROUNDS = 10;
 const VERIFICATION_TOKEN_TTL_HOURS = 24;
 const RESET_TOKEN_TTL_HOURS = 1;
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 function buildVerifyLink(token) {
   const frontendUrl = process.env.FRONTEND_VERIFY_EMAIL_URL || 'http://localhost:5173/verify-email';
@@ -121,8 +123,6 @@ async function me(req, res, next) {
 }
 
 // GET /api/auth/verify-email?token=xxx
-// Trong thực tế, link trong email sẽ trỏ tới 1 trang frontend, trang đó gọi API này
-// (hoặc gọi thẳng API này nếu chưa có frontend, test trực tiếp bằng Postman/trình duyệt).
 async function verifyEmail(req, res, next) {
   try {
     const { token } = req.query;
@@ -145,8 +145,6 @@ async function verifyEmail(req, res, next) {
 }
 
 // POST /api/auth/resend-verification
-// Body: { email }
-// Trả về message chung chung dù email tồn tại/đã xác thực hay không, tránh dò quét email.
 async function resendVerification(req, res, next) {
   try {
     const { email } = req.body;
@@ -213,4 +211,64 @@ async function resetPassword(req, res, next) {
   }
 }
 
-module.exports = { register, login, me, verifyEmail, resendVerification, forgotPassword, resetPassword };
+// POST /api/auth/google, body: { idToken }
+async function googleLogin(req, res, next) {
+  try {
+    const { idToken } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ message: 'Thiếu idToken.' });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, name } = payload;
+
+    let [rows] = await authModel.findByGoogleId(googleId);
+
+    if (rows.length === 0) {
+      // Chưa từng đăng nhập Google trước đó -> kiểm tra email đã tồn tại theo cách khác chưa
+      const [existing] = await authModel.findByEmail(email);
+      if (existing.length > 0) {
+        return res.status(409).json({
+          message: 'Email này đã đăng ký bằng mật khẩu thường. Vui lòng đăng nhập bằng email/mật khẩu.',
+        });
+      }
+      const [result] = await authModel.createGoogleUser(name, email, googleId);
+      rows = [{ id: result.insertId, full_name: name, email, role: 'customer', is_active: true }];
+    }
+
+    const user = rows[0];
+
+    if (user.is_active === false || user.is_active === 0) {
+      return res.status(403).json({ message: 'Tài khoản đã bị khóa.', code: 'ACCOUNT_DISABLED' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
+
+    return res.json({
+      message: 'Đăng nhập Google thành công.',
+      token,
+      user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  register,
+  login,
+  me,
+  verifyEmail,
+  resendVerification,
+  forgotPassword,
+  resetPassword,
+  googleLogin,
+};

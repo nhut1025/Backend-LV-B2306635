@@ -14,7 +14,6 @@ async function findById(id) {
   );
 }
 
-// Tạo user kèm token xác thực email ngay từ lúc đăng ký — is_verified mặc định FALSE.
 async function createUser(fullName, email, phone, passwordHash, verificationToken, verificationTokenExpires) {
   return pool.query(
     `INSERT INTO users (full_name, email, phone, password_hash, role, is_verified, verification_token, verification_token_expires)
@@ -23,9 +22,6 @@ async function createUser(fullName, email, phone, passwordHash, verificationToke
   );
 }
 
-// ---- Xác thực email ----
-
-// Chỉ trả về user nếu token khớp, chưa hết hạn, và CHƯA xác thực trước đó.
 async function findByValidVerificationToken(token) {
   return pool.query(
     `SELECT id, email FROM users
@@ -43,7 +39,6 @@ async function markEmailVerified(userId) {
   );
 }
 
-// Dùng khi resend link xác thực (token cũ hết hạn hoặc bị mất email).
 async function setVerificationToken(userId, token, expiresAt) {
   return pool.query(
     'UPDATE users SET verification_token = ?, verification_token_expires = ? WHERE id = ?',
@@ -113,6 +108,31 @@ async function toggleStaffActive(id, isActive) {
   );
 }
 
+// ---- Đăng nhập Google ----
+
+async function findByGoogleId(googleId) {
+  return pool.query(
+    'SELECT id, full_name, email, role, is_active FROM users WHERE google_id = ?',
+    [googleId]
+  );
+}
+
+async function createGoogleUser(fullName, email, googleId) {
+  return pool.query(
+    `INSERT INTO users (full_name, email, google_id, role, is_active, is_verified)
+     VALUES (?, ?, ?, 'customer', TRUE, TRUE)`,
+    [fullName, email, googleId]
+  );
+}
+
+// ---- Bảo vệ khỏi tự khóa / khóa hết manager ----
+
+async function countActiveManagers() {
+  return pool.query(
+    `SELECT COUNT(*) AS count FROM users WHERE role = 'manager' AND is_active = TRUE`
+  );
+}
+
 module.exports = {
   findByEmail,
   findById,
@@ -128,4 +148,7 @@ module.exports = {
   findStaffById,
   updateStaffById,
   toggleStaffActive,
+  findByGoogleId,
+  createGoogleUser,
+  countActiveManagers,
 };

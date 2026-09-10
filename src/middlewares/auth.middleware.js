@@ -1,7 +1,7 @@
-
 const jwt = require('jsonwebtoken');
+const { pool } = require('../config/db');
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -12,7 +12,13 @@ function authMiddleware(req, res, next) {
 
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = payload; 
+
+    const [rows] = await pool.query('SELECT is_active FROM users WHERE id = ?', [payload.id]);
+    if (rows.length === 0 || rows[0].is_active === false || rows[0].is_active === 0) {
+      return res.status(401).json({ message: 'Tài khoản đã bị khóa hoặc không tồn tại.' });
+    }
+
+    req.user = payload;
     next();
   } catch (err) {
     return res.status(401).json({ message: 'Token không hợp lệ hoặc đã hết hạn.' });
