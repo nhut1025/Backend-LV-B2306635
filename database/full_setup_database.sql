@@ -2,7 +2,7 @@
 -- FILE NÀY CHẠY ĐƯỢC NHIỀU LẦN MÀ KHÔNG LỖI, KHÔNG MẤT DỮ LIỆU.
 -- Dùng cho cả 2 trường hợp: setup CSDL mới hoàn toàn, HOẶC bổ sung
 -- cột/bảng còn thiếu vào CSDL đã có sẵn (như DB hiện tại của bạn).
--- Theo đúng: Tài liệu tổng hợp Website Quản lý & Đặt món Nhà hàng (v3)
+-- Theo đúng: Tài liệu tổng hợp Website Quản lý & Đặt món Nhà hàng (v7)
 -- =====================================================================
 
 CREATE DATABASE IF NOT EXISTS quan_an_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -14,9 +14,11 @@ CREATE TABLE IF NOT EXISTS users (
   full_name VARCHAR(120) NOT NULL,
   email VARCHAR(255) NOT NULL UNIQUE,
   phone VARCHAR(30) NULL,
-  password_hash VARCHAR(255) NOT NULL,
-  role ENUM('customer','staff','kitchen','manager') NOT NULL DEFAULT 'customer',
+  password_hash VARCHAR(255) NULL,
+  role ENUM('customer','phuc_vu','thu_ngan','kitchen','manager') NOT NULL DEFAULT 'customer',
   avatar_url VARCHAR(500) NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  google_id VARCHAR(255) NULL UNIQUE,
   is_verified BOOLEAN NOT NULL DEFAULT FALSE,
   verification_token VARCHAR(64) NULL,
   verification_token_expires DATETIME NULL,
@@ -26,17 +28,44 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Nếu bảng users đã tồn tại từ trước với enum role cũ (chưa có 'kitchen'/'manager') -> vá lại
+-- Nếu bảng users đã tồn tại từ trước với enum role cũ (2 role 'staff'/'kitchen'/'manager',
+-- chưa tách 'phuc_vu'/'thu_ngan') -> vá lại enum. Dữ liệu cũ role='staff' (nếu còn sót)
+-- cần tự chuyển tay sang 'phuc_vu' hoặc 'thu_ngan' vì máy không tự đoán được đúng vai trò cũ.
 SET @role_ok = (
   SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'role'
-    AND COLUMN_TYPE LIKE '%kitchen%' AND COLUMN_TYPE LIKE '%manager%'
+    AND COLUMN_TYPE LIKE '%phuc_vu%' AND COLUMN_TYPE LIKE '%thu_ngan%'
 );
 SET @sql = IF(@role_ok = 0,
-  "ALTER TABLE users MODIFY COLUMN role ENUM('customer','staff','kitchen','manager') NOT NULL DEFAULT 'customer'",
+  "ALTER TABLE users MODIFY COLUMN role ENUM('customer','staff','phuc_vu','thu_ngan','kitchen','manager') NOT NULL DEFAULT 'customer'",
   'SELECT 1'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- Nếu bảng users đã tồn tại từ trước mà chưa có is_active -> vá lại
+SET @col_exists = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'is_active'
+);
+SET @sql = IF(@col_exists = 0,
+  "ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE AFTER avatar_url",
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- Nếu bảng users đã tồn tại từ trước mà chưa có google_id -> vá lại
+SET @col_exists = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'google_id'
+);
+SET @sql = IF(@col_exists = 0,
+  "ALTER TABLE users ADD COLUMN google_id VARCHAR(255) NULL UNIQUE AFTER is_active",
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- Cho phép password_hash NULL (tài khoản đăng nhập Google không có mật khẩu riêng)
+ALTER TABLE users MODIFY COLUMN password_hash VARCHAR(255) NULL;
 
 -- Nếu bảng users đã tồn tại từ trước mà chưa có reset_token/reset_token_expires -> vá lại
 SET @col_exists = (
@@ -162,12 +191,28 @@ CREATE TABLE IF NOT EXISTS deposits (
   amount DECIMAL(10,2) NOT NULL DEFAULT 50000,
   status ENUM('cho_thanh_toan','da_coc','dang_hoan','da_hoan','hoan_that_bai','mat_coc','da_tru_bill') NOT NULL DEFAULT 'cho_thanh_toan',
   transaction_code VARCHAR(100) NULL,
+  refund_bank_code VARCHAR(20) NULL,
+  refund_account_number VARCHAR(50) NULL,
+  refund_account_name VARCHAR(100) NULL,
   refund_transaction_code VARCHAR(100) NULL,
   paid_at DATETIME NULL,
   refunded_at DATETIME NULL,
   refund_failed_reason VARCHAR(255) NULL,
   FOREIGN KEY (reservation_id) REFERENCES reservations(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Nếu bảng deposits đã tồn tại từ trước (chưa có 3 cột thông tin hoàn tiền) -> vá lại
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'deposits' AND column_name = 'refund_bank_code');
+SET @sql = IF(@col_exists = 0, "ALTER TABLE deposits ADD COLUMN refund_bank_code VARCHAR(20) NULL AFTER transaction_code", 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'deposits' AND column_name = 'refund_account_number');
+SET @sql = IF(@col_exists = 0, "ALTER TABLE deposits ADD COLUMN refund_account_number VARCHAR(50) NULL AFTER refund_bank_code", 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'deposits' AND column_name = 'refund_account_name');
+SET @sql = IF(@col_exists = 0, "ALTER TABLE deposits ADD COLUMN refund_account_name VARCHAR(100) NULL AFTER refund_account_number", 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- ============ 11. BILLS ============
 CREATE TABLE IF NOT EXISTS bills (
@@ -308,7 +353,7 @@ CREATE TABLE IF NOT EXISTS recommendation_evaluations (
   evaluated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ============ INDEX HIỆU NĂNG (theo mục 3.7 tài liệu v3) ============
+-- ============ INDEX HIỆU NĂNG ============
 -- Mỗi index đều kiểm tra tồn tại trước khi tạo, an toàn chạy lại nhiều lần.
 
 SET @idx_exists = (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reservations' AND INDEX_NAME = 'idx_reservations_date');
@@ -339,17 +384,14 @@ INSERT IGNORE INTO settings (setting_key, setting_value) VALUES
   ('reservation_hold_minutes', '3'),
   ('table_capacity_min', '1'),
   ('table_capacity_max', '16'),
-  ('deposit_amount', '50000');
+  ('deposit_amount', '50000'),
+  ('restaurant_bank_bin', ''),
+  ('restaurant_account_number', ''),
+  ('restaurant_account_name', '');
 
--- ============ SEED: TÀI KHOẢN MANAGER ĐẦU TIÊN (tuỳ chọn) ============
--- Bỏ qua đoạn này nếu bạn đã có sẵn tài khoản manager (ví dụ tài khoản System Manager
--- đã tạo trước đó). Đổi email/mật khẩu mẫu bên dưới trước khi chạy nếu muốn dùng.
--- Mật khẩu mẫu dưới đây tương ứng với hash demo, hãy đổi ngay sau khi đăng nhập lần đầu.
 
--- INSERT INTO users (full_name, email, password_hash, role, is_verified)
--- VALUES ('System Manager', 'manager@example.com', '<bcrypt_hash_cua_ban>', 'manager', TRUE)
--- ON DUPLICATE KEY UPDATE role = VALUES(role), is_verified = TRUE;
-
--- ============ KIỂM TRA LẠI SAU KHI CHẠY ============
 SELECT * FROM settings;
 SHOW TABLES;
+
+USE quan_an_db;
+UPDATE settings SET setting_value = '15' WHERE setting_key = 'reservation_hold_minutes';

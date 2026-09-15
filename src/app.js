@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -10,6 +9,7 @@ const dishRoutes = require('./routes/dish.routes');
 const tableRoutes = require('./routes/table.routes');
 const userRoutes = require('./routes/user.routes');
 const reservationRoutes = require('./routes/reservation.routes');
+const settingsRoutes = require('./routes/settings.routes');
 const { notFoundHandler, errorHandler } = require('./middlewares/error.middleware');
 
 const app = express();
@@ -26,6 +26,7 @@ app.use('/api/dishes', dishRoutes);
 app.use('/api/tables', tableRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/reservations', reservationRoutes);
+app.use('/api/settings', settingsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
