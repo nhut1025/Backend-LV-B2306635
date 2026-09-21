@@ -51,8 +51,6 @@ async function createHold(req, res, next) {
       status: 'giu_tam',
       hold_minutes: result.holdMinutes,
       table_ids: result.tableIds,
-      deposit_amount: result.depositAmount,
-      transaction_code: result.transactionCode,
     });
   } catch (err) {
     next(err);
@@ -76,6 +74,27 @@ async function getMineById(req, res, next) {
       return res.status(404).json({ message: 'Không tìm thấy đặt bàn.' });
     }
     res.json({ reservation: rows[0] });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/reservations/upcoming — phuc_vu xem danh sách đặt bàn sắp tới để chuẩn bị
+async function listUpcoming(req, res, next) {
+  try {
+    const rows = await reservationModel.findUpcomingReservations();
+    res.json({ upcoming: rows });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PATCH /api/reservations/:id/confirm-arrival — phuc_vu xác nhận khách đã đến
+async function confirmArrival(req, res, next) {
+  try {
+    const { id } = req.params;
+    await reservationModel.confirmArrival(id);
+    res.json({ message: 'Đã xác nhận khách đến. Bàn chuyển sang trạng thái có khách.' });
   } catch (err) {
     next(err);
   }
@@ -141,4 +160,4 @@ async function confirmDeposit(req, res, next) {
   }
 }
 
-module.exports = { suggestTables, createHold, listMine, getMineById, getDepositQr, listPendingDeposits, confirmDeposit };
+module.exports = { suggestTables, createHold, listMine, getMineById, getDepositQr, listPendingDeposits, confirmDeposit, listUpcoming, confirmArrival };

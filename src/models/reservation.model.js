@@ -24,7 +24,7 @@ function suggestTableCombo(freeTables, partySize) {
     total += table.capacity;
     if (total >= partySize) return combo;
   }
-  return null; // không đủ chỗ dù ghép hết bàn trống
+  return null;
 }
 
 async function getHoldMinutes() {
@@ -32,16 +32,13 @@ async function getHoldMinutes() {
   return parseInt(value, 10);
 }
 
-// Tạo reservation ở trạng thái giu_tam + khóa các bàn liên quan + tạo kèm deposits,
-// tất cả trong 1 transaction. table_ids: mảng id bàn do client gửi lên.
 async function createHold(userId, { partySize, reservationDate, reservationTime, phone, tableIds }) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
 
-    // Khóa dòng để tránh 2 khách cùng giữ 1 bàn (race condition)
     const [lockedTables] = await conn.query(
-      `SELECT id, table_number, capacity, status FROM restaurant_tables WHERE id IN (?) FOR UPDATE`,
+      `SELECT id, capacity, status FROM restaurant_tables WHERE id IN (?) FOR UPDATE`,
       [tableIds]
     );
 
@@ -87,14 +84,7 @@ async function createHold(userId, { partySize, reservationDate, reservationTime,
       [userId, holdMinutes, reservationId, tableIds]
     );
 
-    const [[customer]] = await conn.query(
-      'SELECT full_name FROM users WHERE id = ?',
-      [userId]
-    );
-    const tableNumbers = lockedTables.map((table) => table.table_number).join(', ');
-
-    // Nội dung này được in trên mã QR để thu ngân đối chiếu giao dịch.
-    const transactionCode = `tai khoan khach hang ${customer.full_name} da chuyen khoan tien coc ban ${tableNumbers}`;
+    const transactionCode = `COC${reservationId}`;
     await conn.query(
       `INSERT INTO deposits (reservation_id, amount, status, transaction_code)
        VALUES (?, ?, 'cho_thanh_toan', ?)`,
@@ -138,7 +128,62 @@ async function findMyReservationById(userId, reservationId) {
   return rows;
 }
 
-// ===== Dùng cho cron job giải phóng bàn giữ tạm hết hạn =====
+// ===== Phase 4: vận hành nhân viên phục vụ =====
+
+// Danh sách đặt bàn đã cọc, đang chờ khách đến — sắp xếp gần nhất lên đầu để NV chuẩn bị trước.
+async function findUpcomingReservations() {
+  const [rows] = await pool.query(
+    `SELECT r.id, r.party_size, r.reservation_date, r.reservation_time, r.phone,
+            u.full_name AS customer_name,
+            GROUP_CONCAT(rt.table_id) AS table_ids,
+            GROUP_CONCAT(t.table_number) AS table_numbers
+     FROM reservations r
+     JOIN users u ON u.id = r.user_id
+     LEFT JOIN reservation_tables rt ON rt.reservation_id = r.id
+     LEFT JOIN restaurant_tables t ON t.id = rt.table_id
+     WHERE r.status = 'da_dat'
+     GROUP BY r.id
+     ORDER BY r.reservation_date ASC, r.reservation_time ASC`
+  );
+  return rows;
+}
+
+// NV xác nhận khách đã đến: mọi bàn trong tổ hợp chuyển da_dat -> co_khach.
+// reservations.status GIỮ NGUYÊN 'da_dat' — chỉ chuyển 'hoan_thanh' khi thanh toán xong (Phase 7).
+async function confirmArrival(reservationId) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [reservationRows] = await conn.query(
+      `SELECT id, status FROM reservations WHERE id = ? FOR UPDATE`,
+      [reservationId]
+    );
+    if (reservationRows.length === 0 || reservationRows[0].status !== 'da_dat') {
+      const err = new Error('Đơn đặt bàn không ở trạng thái đã đặt (có thể chưa cọc hoặc đã hoàn tất).');
+      err.status = 409;
+      throw err;
+    }
+
+    const [result] = await conn.query(
+      `UPDATE restaurant_tables SET status = 'co_khach'
+       WHERE current_reservation_id = ? AND status = 'da_dat'`,
+      [reservationId]
+    );
+    if (result.affectedRows === 0) {
+      const err = new Error('Không tìm thấy bàn nào ở trạng thái đã đặt cho đơn này.');
+      err.status = 409;
+      throw err;
+    }
+
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
 
 // ===== Dùng cho cron job giải phóng bàn giữ tạm hết hạn =====
 
@@ -185,8 +230,6 @@ async function releaseExpiredReservation(reservationId) {
 
 // ===== Phase 3: thanh toán cọc qua VietQR =====
 
-// Lấy thông tin cọc của 1 đơn đặt bàn — dùng để dựng mã QR hiển thị cho khách.
-// Chỉ trả về nếu đơn đặt bàn thuộc đúng user_id truyền vào (khách chỉ xem được cọc của mình).
 async function findDepositByReservationId(reservationId, userId) {
   const [rows] = await pool.query(
     `SELECT d.id, d.reservation_id, d.amount, d.status, d.transaction_code, d.paid_at
@@ -198,8 +241,6 @@ async function findDepositByReservationId(reservationId, userId) {
   return rows;
 }
 
-// Danh sách cọc đang chờ thu ngân xác nhận — chỉ những đơn còn ở trạng thái giu_tam
-// (chưa hết hạn giữ, vì hết hạn cron sẽ tự huỷ trước khi thu ngân kịp xác nhận).
 async function findPendingDeposits() {
   const [rows] = await pool.query(
     `SELECT d.id AS deposit_id, d.reservation_id, d.amount, d.transaction_code, d.status,
@@ -219,7 +260,6 @@ async function findPendingDeposits() {
   return rows;
 }
 
-// Thu ngân xác nhận đã nhận cọc: da_coc + giu_tam -> da_dat, đồng bộ mọi bàn trong tổ hợp.
 async function confirmDeposit(reservationId) {
   const conn = await pool.getConnection();
   try {
@@ -260,7 +300,6 @@ async function confirmDeposit(reservationId) {
       [reservationId]
     );
 
-    // Đồng bộ mọi bàn trong tổ hợp: hết giữ tạm, chuyển đã đặt, giữ nguyên current_reservation_id
     await conn.query(
       `UPDATE restaurant_tables
        SET status = 'da_dat', locked_by = NULL, locked_until = NULL
@@ -288,4 +327,6 @@ module.exports = {
   findDepositByReservationId,
   findPendingDeposits,
   confirmDeposit,
+  findUpcomingReservations,
+  confirmArrival,
 };
