@@ -35,4 +35,25 @@ async function remove(id) {
   return pool.query('DELETE FROM restaurant_tables WHERE id = ?', [id]);
 }
 
-module.exports = { findAll, findById, create, update, findStatusById, remove };
+// ===== Phase 4: vận hành nhân viên phục vụ =====
+// Khách vãng lai: chỉ cho phép khi bàn đang trống, chuyển thẳng sang co_khach.
+async function assignWalkIn(id) {
+  return pool.query(
+    `UPDATE restaurant_tables
+     SET status = 'co_khach', locked_by = NULL, locked_until = NULL, current_reservation_id = NULL
+     WHERE id = ? AND status = 'trong'`,
+    [id]
+  );
+}
+
+// Trả bàn về trống thủ công: chỉ cho phép từ co_khach.
+async function releaseTable(id) {
+  return pool.query(
+    `UPDATE restaurant_tables
+     SET status = 'trong', locked_by = NULL, locked_until = NULL, current_reservation_id = NULL
+     WHERE id = ? AND status = 'co_khach'`,
+    [id]
+  );
+}
+
+module.exports = { findAll, findById, create, update, findStatusById, remove, assignWalkIn, releaseTable };

@@ -142,6 +142,12 @@ async function findUpcomingReservations() {
      LEFT JOIN reservation_tables rt ON rt.reservation_id = r.id
      LEFT JOIN restaurant_tables t ON t.id = rt.table_id
      WHERE r.status = 'da_dat'
+       AND EXISTS (
+         SELECT 1
+         FROM restaurant_tables active_table
+         WHERE active_table.current_reservation_id = r.id
+           AND active_table.status = 'da_dat'
+       )
      GROUP BY r.id
      ORDER BY r.reservation_date ASC, r.reservation_time ASC`
   );
@@ -177,6 +183,60 @@ async function confirmArrival(reservationId) {
     }
 
     await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+// Nhân viên phục vụ hủy đặt bàn thủ công khi đơn chưa hoàn tất/đang còn hiệu lực.
+async function cancelReservationByStaff(reservationId) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [reservationRows] = await conn.query(
+      `SELECT id, status FROM reservations WHERE id = ? FOR UPDATE`,
+      [reservationId]
+    );
+    if (reservationRows.length === 0) {
+      const err = new Error('Không tìm thấy đặt bàn này.');
+      err.status = 404;
+      throw err;
+    }
+
+    if (!['giu_tam', 'da_dat'].includes(reservationRows[0].status)) {
+      const err = new Error('Chỉ có thể hủy đơn đang ở trạng thái giữ tạm hoặc đã đặt.');
+      err.status = 409;
+      throw err;
+    }
+
+    const [tableRows] = await conn.query(
+      `SELECT table_id FROM reservation_tables WHERE reservation_id = ?`,
+      [reservationId]
+    );
+    const tableIds = tableRows.map((row) => row.table_id);
+
+    if (tableIds.length > 0) {
+      await conn.query(
+        `UPDATE restaurant_tables
+         SET status = 'trong', locked_by = NULL, locked_until = NULL, current_reservation_id = NULL
+         WHERE id IN (?)`,
+        [tableIds]
+      );
+    }
+
+    await conn.query(
+      `UPDATE reservations
+       SET status = 'da_huy', cancelled_at = NOW(), cancelled_by = 'employee'
+       WHERE id = ? AND status IN ('giu_tam', 'da_dat')`,
+      [reservationId]
+    );
+
+    await conn.commit();
+    return { reservationId, cancelled: true, tableIds };
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -329,4 +389,5 @@ module.exports = {
   confirmDeposit,
   findUpcomingReservations,
   confirmArrival,
+  cancelReservationByStaff,
 };

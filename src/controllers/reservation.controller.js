@@ -100,6 +100,17 @@ async function confirmArrival(req, res, next) {
   }
 }
 
+// PATCH /api/reservations/:id/cancel-by-staff — phuc_vu hủy đặt bàn thủ công
+async function cancelReservationByStaff(req, res, next) {
+  try {
+    const { id } = req.params;
+    await reservationModel.cancelReservationByStaff(id);
+    res.json({ message: 'Đã hủy đặt bàn thành công. Bàn đã được trả về trạng thái trống.' });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ===== Phase 3: thanh toán cọc qua VietQR =====
 
 // GET /api/reservations/:id/deposit-qr — khách xem mã QR để chuyển khoản cọc
@@ -160,4 +171,15 @@ async function confirmDeposit(req, res, next) {
   }
 }
 
-module.exports = { suggestTables, createHold, listMine, getMineById, getDepositQr, listPendingDeposits, confirmDeposit, listUpcoming, confirmArrival };
+module.exports = {
+  suggestTables,
+  createHold,
+  listMine,
+  getMineById,
+  getDepositQr,
+  listPendingDeposits,
+  confirmDeposit,
+  listUpcoming,
+  confirmArrival,
+  cancelReservationByStaff,
+};

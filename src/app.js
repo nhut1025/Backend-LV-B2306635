@@ -10,6 +10,7 @@ const tableRoutes = require('./routes/table.routes');
 const userRoutes = require('./routes/user.routes');
 const reservationRoutes = require('./routes/reservation.routes');
 const settingsRoutes = require('./routes/settings.routes');
+const billRoutes = require('./routes/bill.routes');
 const { notFoundHandler, errorHandler } = require('./middlewares/error.middleware');
 
 const app = express();
@@ -27,6 +28,7 @@ app.use('/api/tables', tableRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/reservations', reservationRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/bills', billRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

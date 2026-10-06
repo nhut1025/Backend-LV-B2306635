@@ -13,5 +13,6 @@ router.get('/:id', authMiddleware, requireRole('customer'), ctrl.getMineById);
 router.get('/:id/deposit-qr', authMiddleware, requireRole('customer'), ctrl.getDepositQr);
 router.patch('/:id/confirm-deposit', authMiddleware, requireRole('thu_ngan'), ctrl.confirmDeposit);
 router.patch('/:id/confirm-arrival', authMiddleware, requireRole('phuc_vu'), ctrl.confirmArrival);
+router.patch('/:id/cancel-by-staff', authMiddleware, requireRole('phuc_vu'), ctrl.cancelReservationByStaff);
 
 module.exports = router;

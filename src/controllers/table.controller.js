@@ -89,4 +89,43 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove };
+// ===== Phase 4: vận hành nhân viên phục vụ =====
+async function assignWalkIn(req, res, next) {
+  try {
+    const { id } = req.params;
+    const [result] = await tableModel.assignWalkIn(id);
+
+    if (result.affectedRows === 0) {
+      return res.status(409).json({ message: 'Bàn không trống hoặc không tồn tại.' });
+    }
+
+    res.json({
+      message: 'Đã nhận khách vãng lai. Bàn chuyển sang trạng thái có khách.',
+      table_id: Number(id),
+      status: 'co_khach',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function releaseTable(req, res, next) {
+  try {
+    const { id } = req.params;
+    const [result] = await tableModel.releaseTable(id);
+
+    if (result.affectedRows === 0) {
+      return res.status(409).json({ message: 'Chỉ có thể trả bàn đang ở trạng thái có khách.' });
+    }
+
+    res.json({
+      message: 'Đã trả bàn về trống.',
+      table_id: Number(id),
+      status: 'trong',
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { list, getById, create, update, remove, assignWalkIn, releaseTable };
