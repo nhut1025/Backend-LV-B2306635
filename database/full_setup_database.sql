@@ -224,12 +224,17 @@ CREATE TABLE IF NOT EXISTS bills (
   deposit_id INT UNSIGNED NULL,
   payment_method ENUM('online','tien_mat') NULL,
   payment_code VARCHAR(100) NULL,
+  paid_by INT UNSIGNED NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   paid_at DATETIME NULL,
   FOREIGN KEY (table_id) REFERENCES restaurant_tables(id),
   FOREIGN KEY (reservation_id) REFERENCES reservations(id),
   FOREIGN KEY (deposit_id) REFERENCES deposits(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'bills' AND column_name = 'paid_by');
+SET @sql = IF(@col_exists = 0, "ALTER TABLE bills ADD COLUMN paid_by INT UNSIGNED NULL AFTER payment_code", 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- ============ 12. BILL_ITEMS ============
 CREATE TABLE IF NOT EXISTS bill_items (

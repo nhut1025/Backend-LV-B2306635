@@ -62,7 +62,7 @@ async function releaseTable(id) {
     );
     if (tableRows.length === 0 || tableRows[0].status !== 'co_khach') {
       await conn.rollback();
-      return { affectedRows: 0 };
+      return [{ affectedRows: 0 }, []];
     }
 
     const [billRows] = await conn.query(
@@ -95,7 +95,7 @@ async function releaseTable(id) {
     );
 
     await conn.commit();
-    return result;
+    return [result, []];
   } catch (err) {
     await conn.rollback();
     throw err;

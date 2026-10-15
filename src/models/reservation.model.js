@@ -320,7 +320,7 @@ async function findPendingDeposits() {
   return rows;
 }
 
-async function confirmDeposit(reservationId) {
+async function confirmDeposit(reservationId, cashierId) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -350,9 +350,9 @@ async function confirmDeposit(reservationId) {
       throw err;
     }
 
-    await conn.query(
-      `UPDATE deposits SET status = 'da_coc', paid_at = NOW() WHERE reservation_id = ?`,
-      [reservationId]
+      await conn.query(
+      `UPDATE deposits SET status = 'da_coc', paid_at = NOW(), confirmed_by = ? WHERE reservation_id = ?`,
+      [cashierId, reservationId]
     );
 
     await conn.query(

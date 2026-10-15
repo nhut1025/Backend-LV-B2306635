@@ -14,6 +14,7 @@ router.patch('/items/:itemId/serve', authMiddleware, requireRole('phuc_vu'), ctr
 router.get('/payable', authMiddleware, requireRole('thu_ngan'), ctrl.listPayable);
 router.get('/:billId/payment-summary', authMiddleware, requireRole('thu_ngan'), ctrl.getPaymentSummary);
 router.get('/:billId/payment-qr', authMiddleware, requireRole('thu_ngan'), ctrl.getPaymentQr);
+router.post('/:billId/payment-request', authMiddleware, requireRole('phuc_vu', 'thu_ngan'), ctrl.requestPayment);
 router.patch('/:billId/pay', authMiddleware, requireRole('thu_ngan'), ctrl.payBill);
 
 module.exports = router;

@@ -24,6 +24,18 @@ Authentication endpoints are mounted under `/api/auth`:
 Managers can create internal accounts with `POST /api/users/staff` using a
 Bearer token and `{ "full_name", "email", "password", "role": "phuc_vu|thu_ngan|kitchen|manager" }`.
 
+## Bill Payment
+
+When a guest asks to pay, service staff submits
+`POST /api/bills/:billId/payment-request` with `{ "payment_method": "online" }`
+or `{ "payment_method": "tien_mat" }`. The online response contains `qr_url`
+and `payment_code`; the bill and table remain open while awaiting cashier
+confirmation. Cashiers can also submit this request for guests paying directly
+at the counter. Cashiers confirm receipt with
+`PATCH /api/bills/:billId/pay` and the same `payment_method`; only then is the
+bill closed and the table released. Cashiers can see pending methods in
+`GET /api/bills/payable`.
+
 Manager staff endpoints:
 
 - `GET /api/users/staff`

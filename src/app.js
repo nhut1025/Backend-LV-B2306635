@@ -12,6 +12,7 @@ const reservationRoutes = require('./routes/reservation.routes');
 const settingsRoutes = require('./routes/settings.routes');
 const billRoutes = require('./routes/bill.routes');
 const { notFoundHandler, errorHandler } = require('./middlewares/error.middleware');
+const financeRoutes = require('./routes/finance.routes');
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/reservations', reservationRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/bills', billRoutes);
+app.use('/api/finance', financeRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

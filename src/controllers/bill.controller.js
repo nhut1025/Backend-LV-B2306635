@@ -169,6 +169,53 @@ async function getPaymentQr(req, res, next) {
   }
 }
 
+// POST /api/bills/:billId/payment-request — phuc_vu/thu_ngan chọn phương thức, chờ thu ngân xác nhận
+async function requestPayment(req, res, next) {
+  try {
+    const { billId } = req.params;
+    const { payment_method } = req.body;
+
+    if (!['tien_mat', 'online'].includes(payment_method)) {
+      return res.status(400).json({ message: 'payment_method phải là "tien_mat" hoặc "online".' });
+    }
+
+    let bankConfig;
+    if (payment_method === 'online') {
+      bankConfig = await getBankConfig();
+      if (!bankConfig.bank_bin || !bankConfig.account_number) {
+        return res.status(503).json({ message: 'Quán chưa cấu hình tài khoản ngân hàng nhận tiền.' });
+      }
+    }
+
+    const request = await billModel.requestPayment(billId, payment_method);
+    const qrUrl = payment_method === 'online'
+      ? buildVietQrUrl({
+          bankBin: bankConfig.bank_bin,
+          accountNumber: bankConfig.account_number,
+          amount: request.summary.amount_due,
+          addInfo: request.payment_code,
+          accountName: bankConfig.account_name,
+        })
+      : null;
+
+    emitToRoom('thu_ngan', 'cashier:payment-requested', {
+      bill_id: request.bill_id,
+      table_id: request.table_id,
+      table_number: request.table_number,
+      payment_method: request.payment_method,
+      amount_due: request.summary.amount_due,
+    });
+
+    res.json({
+      message: 'Đã gửi yêu cầu thanh toán, chờ thu ngân xác nhận.',
+      ...request,
+      qr_url: qrUrl,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // PATCH /api/bills/:billId/pay — thu_ngan xác nhận đã thu tiền. Body: { payment_method: 'tien_mat' | 'online' }
 async function payBill(req, res, next) {
   try {
@@ -179,11 +226,12 @@ async function payBill(req, res, next) {
       return res.status(400).json({ message: 'payment_method phải là "tien_mat" hoặc "online".' });
     }
 
-    const result = await billModel.payBill(billId, payment_method);
+    const result = await billModel.payBill(billId, payment_method, req.user.id);
+    emitToRoom('phuc_vu', 'service:bill-paid', result);
     res.json({ message: 'Đã xác nhận thanh toán. Bàn đã về trạng thái trống.', ...result });
   } catch (err) {
     next(err);
   }
 }
 
-module.exports = { getByTable, addItem, removeItem, kitchenQueue, readyItems, advanceItem, serveItem, listPayable, getPaymentSummary, getPaymentQr, payBill };
+module.exports = { getByTable, addItem, removeItem, kitchenQueue, readyItems, advanceItem, serveItem, listPayable, getPaymentSummary, getPaymentQr, requestPayment, payBill };

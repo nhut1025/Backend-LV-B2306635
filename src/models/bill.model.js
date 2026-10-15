@@ -74,37 +74,83 @@ async function findBillWithItems(billId) {
 
 // Thêm món — chốt giá tại thời điểm gọi món (unit_price không tham chiếu dishes.price về sau)
 async function addItem(billId, dishId, quantity, note) {
-  const [dishRows] = await pool.query(
-    `SELECT price, is_available FROM dishes WHERE id = ?`,
-    [dishId]
-  );
-  if (dishRows.length === 0) {
-    const err = new Error('Không tìm thấy món ăn.');
-    err.status = 404;
-    throw err;
-  }
-  if (!dishRows[0].is_available) {
-    const err = new Error('Món này hiện đã hết, không thể thêm vào bill.');
-    err.status = 409;
-    throw err;
-  }
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
 
-  const [result] = await pool.query(
-    `INSERT INTO bill_items (bill_id, dish_id, quantity, unit_price, status, note)
-     VALUES (?, ?, ?, ?, 'cho_xac_nhan', ?)`,
-    [billId, dishId, quantity, dishRows[0].price, note || null]
-  );
-  return result.insertId;
+    const [billRows] = await conn.query(
+      `SELECT status, payment_method FROM bills WHERE id = ? FOR UPDATE`,
+      [billId]
+    );
+    if (billRows.length === 0) {
+      const err = new Error('Không tìm thấy bill.');
+      err.status = 404;
+      throw err;
+    }
+    if (billRows[0].status !== 'mo' || billRows[0].payment_method) {
+      const err = new Error('Bill đã chờ thanh toán hoặc đã chốt, không thể thêm món.');
+      err.status = 409;
+      throw err;
+    }
+
+    const [dishRows] = await conn.query(
+      `SELECT price, is_available FROM dishes WHERE id = ?`,
+      [dishId]
+    );
+    if (dishRows.length === 0) {
+      const err = new Error('Không tìm thấy món ăn.');
+      err.status = 404;
+      throw err;
+    }
+    if (!dishRows[0].is_available) {
+      const err = new Error('Món này hiện đã hết, không thể thêm vào bill.');
+      err.status = 409;
+      throw err;
+    }
+
+    const [result] = await conn.query(
+      `INSERT INTO bill_items (bill_id, dish_id, quantity, unit_price, status, note)
+       VALUES (?, ?, ?, ?, 'cho_xac_nhan', ?)`,
+      [billId, dishId, quantity, dishRows[0].price, note || null]
+    );
+    await conn.commit();
+    return result.insertId;
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 }
 
 // Xoá món (soft delete) — chỉ cho xoá khi bếp CHƯA bắt đầu chế biến (còn cho_xac_nhan)
 async function removeItem(billId, itemId) {
-  const [result] = await pool.query(
-    `UPDATE bill_items SET deleted_at = NOW()
-     WHERE id = ? AND bill_id = ? AND deleted_at IS NULL AND status = 'cho_xac_nhan'`,
-    [itemId, billId]
-  );
-  return result.affectedRows;
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [billRows] = await conn.query(
+      `SELECT status, payment_method FROM bills WHERE id = ? FOR UPDATE`,
+      [billId]
+    );
+    if (billRows.length === 0 || billRows[0].status !== 'mo' || billRows[0].payment_method) {
+      await conn.commit();
+      return 0;
+    }
+
+    const [result] = await conn.query(
+      `UPDATE bill_items SET deleted_at = NOW()
+       WHERE id = ? AND bill_id = ? AND deleted_at IS NULL AND status = 'cho_xac_nhan'`,
+      [itemId, billId]
+    );
+    await conn.commit();
+    return result.affectedRows;
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 }
 
 // ===== Phase 6: Kitchen Display System =====
@@ -282,6 +328,64 @@ async function getPaymentSummary(billId) {
   return computeSummary(pool, billId);
 }
 
+// Chọn phương thức thanh toán, khóa nội dung bill và chờ thu ngân xác nhận.
+async function requestPayment(billId, paymentMethod) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [lockedRows] = await conn.query(`SELECT status FROM bills WHERE id = ? FOR UPDATE`, [billId]);
+    if (lockedRows.length === 0) {
+      const err = new Error('Không tìm thấy bill.');
+      err.status = 404;
+      throw err;
+    }
+    if (lockedRows[0].status !== 'mo') {
+      const err = new Error('Bill này đã được thanh toán rồi.');
+      err.status = 409;
+      throw err;
+    }
+
+    const { bill, items, summary } = await computeSummary(conn, billId);
+    if (items.length === 0) {
+      const err = new Error('Bill chưa có món nào, không có gì để thanh toán.');
+      err.status = 409;
+      throw err;
+    }
+    if (summary.unserved_count > 0) {
+      const err = new Error(`Còn ${summary.unserved_count} món chưa phục vụ xong, chưa thể thanh toán.`);
+      err.status = 409;
+      throw err;
+    }
+    if (paymentMethod === 'online' && summary.amount_due <= 0) {
+      const err = new Error('Không còn số tiền cần chuyển khoản (cọc đã đủ trả bill).');
+      err.status = 409;
+      throw err;
+    }
+
+    const paymentCode = paymentMethod === 'online' ? `BILL${billId}` : null;
+    await conn.query(
+      `UPDATE bills SET payment_method = ?, payment_code = ? WHERE id = ? AND status = 'mo'`,
+      [paymentMethod, paymentCode, billId]
+    );
+    await conn.commit();
+
+    return {
+      bill_id: Number(billId),
+      table_id: bill.table_id,
+      table_number: bill.table_number,
+      payment_method: paymentMethod,
+      payment_code: paymentCode,
+      summary,
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
 // Danh sách bill đang mở có ít nhất 1 món — thu_ngan xem để biết bàn nào cần thanh toán.
 async function listPayableBills() {
   const [rows] = await pool.query(
@@ -289,13 +393,15 @@ async function listPayableBills() {
             COUNT(bi.id) AS item_count,
             SUM(CASE WHEN bi.status <> 'da_phuc_vu' THEN 1 ELSE 0 END) AS unserved_count,
             SUM(bi.unit_price * bi.quantity) AS subtotal,
+            b.payment_method, b.payment_code,
             COALESCE(d.amount, 0) AS deposit_amount
      FROM bills b
      JOIN restaurant_tables t ON t.id = b.table_id
      JOIN bill_items bi ON bi.bill_id = b.id AND bi.deleted_at IS NULL
      LEFT JOIN deposits d ON d.reservation_id = b.reservation_id AND d.status = 'da_coc'
      WHERE b.status = 'mo'
-     GROUP BY b.id, b.table_id, b.reservation_id, b.created_at, t.table_number, d.amount
+         GROUP BY b.id, b.table_id, b.reservation_id, b.created_at, t.table_number,
+          b.payment_method, b.payment_code, d.amount
      ORDER BY b.created_at ASC`
   );
   return rows.map((row) => {
@@ -312,12 +418,14 @@ async function listPayableBills() {
       subtotal,
       deposit_amount: depositAmount,
       amount_due: Math.max(0, subtotal - depositAmount),
+      payment_method: row.payment_method,
+      payment_code: row.payment_code,
     };
   });
 }
 
 // thu_ngan xác nhận đã thu tiền: chốt bill, trừ cọc, trả bàn về trống, hoàn tất đặt bàn — CÙNG 1 transaction.
-async function payBill(billId, paymentMethod) {
+async function payBill(billId, paymentMethod, cashierId) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -330,6 +438,11 @@ async function payBill(billId, paymentMethod) {
     }
     if (lockedRows[0].status !== 'mo') {
       const err = new Error('Bill này đã được thanh toán rồi.');
+      err.status = 409;
+      throw err;
+    }
+    if (lockedRows[0].payment_method && lockedRows[0].payment_method !== paymentMethod) {
+      const err = new Error('Phương thức thanh toán không khớp với yêu cầu đang chờ.');
       err.status = 409;
       throw err;
     }
@@ -359,12 +472,13 @@ async function payBill(billId, paymentMethod) {
     }
 
     const paymentCode = paymentMethod === 'online' ? `BILL${billId}` : null;
-    await conn.query(
+        await conn.query(
       `UPDATE bills
-       SET status = 'da_thanh_toan', total_amount = ?, deposit_id = ?, payment_method = ?, payment_code = ?, paid_at = NOW()
+       SET status = 'da_thanh_toan', total_amount = ?, deposit_id = ?, payment_method = ?, payment_code = ?,
+           paid_at = NOW(), paid_by = ?
        WHERE id = ?`,
-      [summary.subtotal, summary.deposit_id, paymentMethod, paymentCode, billId]
-    );
+      [summary.subtotal, summary.deposit_id, paymentMethod, paymentCode, cashierId, billId]
+    );  
 
     await conn.query(
       `UPDATE restaurant_tables
@@ -388,7 +502,13 @@ async function payBill(billId, paymentMethod) {
     }
 
     await conn.commit();
-    return { total: summary.subtotal, deposit_amount: summary.deposit_amount, amount_due: summary.amount_due };
+    return {
+      bill_id: Number(billId),
+      table_id: bill.table_id,
+      total: summary.subtotal,
+      deposit_amount: summary.deposit_amount,
+      amount_due: summary.amount_due,
+    };
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -409,6 +529,7 @@ module.exports = {
   markItemServed,
   findQueueItemById,
   getPaymentSummary,
+  requestPayment,
   listPayableBills,
   payBill,
 };
