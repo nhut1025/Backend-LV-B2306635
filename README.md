@@ -46,3 +46,40 @@ Manager staff endpoints:
 For real email delivery, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
 `SMTP_PASS`, and `MAIL_FROM` in `.env`. Without SMTP settings, links are
 printed to the server console for local development.
+
+## Reservation Preorders
+
+Before using preorder APIs on an existing database, run
+`database/v8_reservation_preorders_migration.sql` once. New installations get
+the preorder tables from `database/full_setup_database.sql`.
+
+Customers may include `preorder_items` when creating a reservation with
+`POST /api/reservations`:
+
+```json
+{
+  "party_size": 4,
+  "reservation_date": "2026-10-25",
+  "reservation_time": "18:30",
+  "phone": "0900000000",
+  "table_ids": [3],
+  "preorder_items": [
+    { "dish_id": 12, "quantity": 2, "note": "Ít cay" }
+  ]
+}
+```
+
+Preorders are stored separately from bills and the kitchen queue until the
+cashier confirms that the customer agreed and the food should be prepared:
+
+- `GET /api/reservations/:id/preorder` — customer views their preorder.
+- `GET /api/reservations/preorders/pending` — cashier lists unprepared orders.
+- `PATCH /api/reservations/:id/preorder/contact` with
+  `{ "result": "da_xac_nhan|khong_nghe_may|tu_choi" }` — cashier records the
+  phone-call result.
+- `POST /api/reservations/:id/preorder/prepare` — cashier confirms preparation;
+  the API adds items to the reservation bill and emits `kitchen:item-added`.
+
+The reservation must be confirmed (`da_dat`) before the cashier can record a
+call or send the preorder to the kitchen. Repeating the prepare request does
+not add duplicate bill items.

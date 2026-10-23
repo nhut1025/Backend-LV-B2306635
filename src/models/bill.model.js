@@ -16,7 +16,7 @@ async function getOrCreateOpenBill(tableId) {
     await conn.beginTransaction();
 
     const [tableRows] = await conn.query(
-      `SELECT id, status, current_reservation_id FROM restaurant_tables WHERE id = ? FOR UPDATE`,
+        `SELECT id, status, current_reservation_id FROM restaurant_tables WHERE id = ? FOR UPDATE`,
       [tableId]
     );
     if (tableRows.length === 0) {

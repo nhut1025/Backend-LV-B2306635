@@ -1,6 +1,47 @@
 const reservationModel = require('../models/reservation.model');
+const { emitToRoom } = require('../utils/socket');
 const { getBankConfig } = require('../utils/settings');
 const { buildVietQrUrl } = require('../utils/vietqr');
+
+function parsePreorderItems(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    const err = new Error('preorder_items phải là một danh sách.');
+    err.status = 400;
+    throw err;
+  }
+
+  const seenDishIds = new Set();
+  return value.map((item) => {
+    if (!item || !Number.isSafeInteger(Number(item.dish_id)) || Number(item.dish_id) <= 0) {
+      const err = new Error('Mỗi món đặt trước phải có dish_id hợp lệ.');
+      err.status = 400;
+      throw err;
+    }
+    if (!Number.isSafeInteger(Number(item.quantity)) || Number(item.quantity) < 1 || Number(item.quantity) > 99) {
+      const err = new Error('Số lượng mỗi món đặt trước phải từ 1 đến 99.');
+      err.status = 400;
+      throw err;
+    }
+    const dishId = Number(item.dish_id);
+    if (seenDishIds.has(dishId)) {
+      const err = new Error('Không gửi trùng món trong preorder_items.');
+      err.status = 400;
+      throw err;
+    }
+    if (item.note !== undefined && item.note !== null && (typeof item.note !== 'string' || item.note.length > 255)) {
+      const err = new Error('Ghi chú món đặt trước không được vượt quá 255 ký tự.');
+      err.status = 400;
+      throw err;
+    }
+    seenDishIds.add(dishId);
+    return {
+      dishId,
+      quantity: Number(item.quantity),
+      note: item.note || null,
+    };
+  });
+}
 
 async function suggestTables(req, res, next) {
   try {
@@ -30,6 +71,7 @@ async function createHold(req, res, next) {
   try {
     const userId = req.user.id;
     const { party_size, reservation_date, reservation_time, phone, table_ids } = req.body;
+    const preorderItems = parsePreorderItems(req.body.preorder_items);
 
     if (!party_size || !reservation_date || !reservation_time || !phone) {
       return res.status(400).json({ message: 'Thiếu party_size, reservation_date, reservation_time hoặc phone.' });
@@ -44,6 +86,7 @@ async function createHold(req, res, next) {
       reservationTime: reservation_time,
       phone,
       tableIds: table_ids,
+      preorderItems,
     });
 
     res.status(201).json({
@@ -51,6 +94,61 @@ async function createHold(req, res, next) {
       status: 'giu_tam',
       hold_minutes: result.holdMinutes,
       table_ids: result.tableIds,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getMyPreorder(req, res, next) {
+  try {
+    const preorder = await reservationModel.findMyPreorder(req.user.id, req.params.id);
+    if (!preorder) {
+      return res.status(404).json({ message: 'Không tìm thấy món đặt trước cho đơn đặt bàn này.' });
+    }
+    res.json({ preorder });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listPendingPreorders(req, res, next) {
+  try {
+    const preorders = await reservationModel.findPendingPreorders();
+    res.json({ preorders });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function recordPreorderContact(req, res, next) {
+  try {
+    const { result } = req.body;
+    const allowedResults = ['da_xac_nhan', 'khong_nghe_may', 'tu_choi'];
+    if (!allowedResults.includes(result)) {
+      return res.status(400).json({
+        message: 'result phải là da_xac_nhan, khong_nghe_may hoặc tu_choi.',
+      });
+    }
+    await reservationModel.recordPreorderContact(req.params.id, req.user.id, result);
+    res.json({ message: 'Đã cập nhật kết quả liên hệ khách.', contact_status: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function preparePreorder(req, res, next) {
+  try {
+    const result = await reservationModel.preparePreorder(req.params.id, req.user.id);
+    if (!result.alreadyPrepared) {
+      for (const item of result.items) emitToRoom('kitchen', 'kitchen:item-added', item);
+    }
+    res.json({
+      message: result.alreadyPrepared
+        ? 'Món đặt trước đã được đưa vào bill trước đó.'
+        : 'Đã đưa món đặt trước vào bill và gửi đến bếp.',
+      bill_id: result.billId,
+      already_prepared: result.alreadyPrepared,
     });
   } catch (err) {
     next(err);
@@ -174,6 +272,10 @@ async function confirmDeposit(req, res, next) {
 module.exports = {
   suggestTables,
   createHold,
+  getMyPreorder,
+  listPendingPreorders,
+  recordPreorderContact,
+  preparePreorder,
   listMine,
   getMineById,
   getDepositQr,
