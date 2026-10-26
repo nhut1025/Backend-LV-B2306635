@@ -30,7 +30,7 @@ async function listBills(req, res, next) {
       return res.status(400).json({ message: 'table_id/cashier_id phải là số nguyên dương.' });
     }
 
-    const bills = await financeModel.listPaidBills({
+    const bills = await financeModel.listBills({
       from,
       to,
       tableId: table.value,
@@ -44,12 +44,12 @@ async function listBills(req, res, next) {
   }
 }
 
-// GET /api/finance/bills/:billId — chi tiết 1 bill đã thanh toán (món, người xác nhận)
+// GET /api/finance/bills/:billId — chi tiết một bill (món, người xác nhận)
 async function getBillDetail(req, res, next) {
   try {
-    const data = await financeModel.findPaidBillDetail(req.params.billId);
+    const data = await financeModel.findBillDetail(req.params.billId);
     if (!data) {
-      return res.status(404).json({ message: 'Không tìm thấy bill đã thanh toán.' });
+      return       res.status(404).json({ message: 'Không tìm thấy bill.' });
     }
     res.json(data);
   } catch (err) {

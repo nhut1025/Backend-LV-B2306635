@@ -20,20 +20,74 @@ async function getProfile(req, res, next) {
 
 async function updateProfile(req, res, next) {
   try {
-    const { full_name, phone, avatar_url } = req.body;
+    const { full_name, phone } = req.body;
 
-    if (!full_name || !full_name.trim()) {
+    if (typeof full_name !== 'string' || !full_name.trim()) {
       return res.status(400).json({ message: 'Thiếu full_name.' });
     }
 
     await userModel.updateProfile(
       req.user.id,
       full_name.trim(),
-      phone || null,
-      avatar_url || null
+      phone || null
     );
 
     res.json({ message: 'Đã cập nhật hồ sơ.' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function uploadAvatar(req, res, next) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'Vui lòng chọn một file hình ảnh hợp lệ.' });
+    }
+
+    const avatarUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    await userModel.updateAvatar(req.user.id, avatarUrl);
+    res.status(200).json({ message: 'Đã cập nhật ảnh đại diện.', avatar_url: avatarUrl });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function changePassword(req, res, next) {
+  try {
+    const { current_password, new_password } = req.body;
+    if (typeof current_password !== 'string' || !current_password ||
+        typeof new_password !== 'string' || !new_password) {
+      return res.status(400).json({ message: 'Vui lòng nhập mật khẩu hiện tại và mật khẩu mới.' });
+    }
+    if (Buffer.byteLength(new_password, 'utf8') < 6 ||
+        Buffer.byteLength(new_password, 'utf8') > 72) {
+      return res.status(400).json({ message: 'Mật khẩu mới phải có từ 6 đến 72 byte.' });
+    }
+
+    const [rows] = await userModel.findPasswordCredentialsById(req.user.id);
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy user.' });
+    }
+    const account = rows[0];
+    if (account.google_id || !account.password_hash) {
+      return res.status(400).json({ message: 'Tài khoản đăng nhập Google không thể đổi mật khẩu tại đây.' });
+    }
+    if (!await bcrypt.compare(current_password, account.password_hash)) {
+      return res.status(400).json({ message: 'Mật khẩu hiện tại không chính xác.' });
+    }
+
+    const passwordHash = await bcrypt.hash(new_password, SALT_ROUNDS);
+    await userModel.updatePassword(req.user.id, passwordHash);
+    res.json({ message: 'Đã đổi mật khẩu.' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getReservationSummary(req, res, next) {
+  try {
+    const summary = await userModel.findReservationSummary(req.user.id);
+    res.json({ summary });
   } catch (err) {
     next(err);
   }
@@ -175,6 +229,9 @@ async function toggleStaffActive(req, res, next) {
 module.exports = {
   getProfile,
   updateProfile,
+  uploadAvatar,
+  changePassword,
+  getReservationSummary,
   getExcludedIngredients,
   setExcludedIngredients,
   createStaff,

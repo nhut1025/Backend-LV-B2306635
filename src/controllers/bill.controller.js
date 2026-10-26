@@ -15,6 +15,15 @@ async function getByTable(req, res, next) {
   }
 }
 
+async function listMyHistory(req, res, next) {
+  try {
+    const bills = await billModel.findMyPaidBillHistory(req.user.id);
+    res.json({ bills });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // POST /api/bills/:billId/items — phuc_vu thêm món vào bill (đẩy realtime xuống bếp)
 async function addItem(req, res, next) {
   try {
@@ -234,4 +243,4 @@ async function payBill(req, res, next) {
   }
 }
 
-module.exports = { getByTable, addItem, removeItem, kitchenQueue, readyItems, advanceItem, serveItem, listPayable, getPaymentSummary, getPaymentQr, requestPayment, payBill };
+module.exports = { getByTable, listMyHistory, addItem, removeItem, kitchenQueue, readyItems, advanceItem, serveItem, listPayable, getPaymentSummary, getPaymentQr, requestPayment, payBill };

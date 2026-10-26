@@ -72,6 +72,59 @@ async function findBillWithItems(billId) {
   return { bill: billRows[0], items };
 }
 
+async function findMyPaidBillHistory(userId) {
+  const [bills] = await pool.query(
+    `SELECT b.id, b.table_id, t.table_number, b.reservation_id, b.total_amount,
+            b.deposit_id, COALESCE(d.amount, 0) AS deposit_amount,
+            b.payment_method, b.payment_code, b.created_at, b.paid_at,
+            b.paid_by AS cashier_id, cashier.full_name AS cashier_name,
+            d.confirmed_by AS deposit_confirmed_by_id,
+            deposit_cashier.full_name AS deposit_confirmed_by_name
+     FROM bills b
+     JOIN reservations r ON r.id = b.reservation_id
+     JOIN restaurant_tables t ON t.id = b.table_id
+     LEFT JOIN deposits d ON d.id = b.deposit_id
+     LEFT JOIN users cashier ON cashier.id = b.paid_by
+     LEFT JOIN users deposit_cashier ON deposit_cashier.id = d.confirmed_by
+     WHERE r.user_id = ? AND b.status = 'da_thanh_toan'
+       AND b.payment_method IS NOT NULL
+     ORDER BY b.paid_at DESC, b.id DESC`,
+    [userId]
+  );
+  if (bills.length === 0) return [];
+
+  const billIds = bills.map((bill) => bill.id);
+  const [items] = await pool.query(
+    `SELECT bi.id, bi.bill_id, bi.dish_id, d.name AS dish_name,
+            bi.quantity, bi.unit_price, bi.note, bi.status
+     FROM bill_items bi
+     JOIN dishes d ON d.id = bi.dish_id
+     WHERE bi.bill_id IN (?) AND bi.deleted_at IS NULL
+     ORDER BY bi.created_at ASC, bi.id ASC`,
+    [billIds]
+  );
+  const itemsByBill = new Map(billIds.map((id) => [id, []]));
+  for (const item of items) {
+    itemsByBill.get(item.bill_id).push(item);
+  }
+
+  return bills.map((bill) => {
+    const depositAmount = Number(bill.deposit_amount);
+    const totalAmount = Number(bill.total_amount);
+    return {
+      ...bill,
+      total_amount: totalAmount,
+      deposit_amount: depositAmount,
+      amount_paid: Math.max(0, totalAmount - depositAmount),
+      items: itemsByBill.get(bill.id).map((item) => ({
+        ...item,
+        unit_price: Number(item.unit_price),
+        line_total: Number(item.unit_price) * item.quantity,
+      })),
+    };
+  });
+}
+
 // Thêm món — chốt giá tại thời điểm gọi món (unit_price không tham chiếu dishes.price về sau)
 async function addItem(billId, dishId, quantity, note) {
   const conn = await pool.getConnection();
@@ -521,6 +574,7 @@ module.exports = {
   findOpenBillByTableId,
   getOrCreateOpenBill,
   findBillWithItems,
+  findMyPaidBillHistory,
   addItem,
   removeItem,
   findKitchenQueue,

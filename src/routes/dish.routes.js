@@ -20,7 +20,7 @@ const imageUpload = multer({
 		},
 	}),
 	fileFilter: (req, file, callback) => callback(null, file.mimetype.startsWith('image/')),
-	limits: { fileSize: 5 * 1024 * 1024 },
+	limits: { fileSize: 20 * 1024 * 1024 },
 });
 
 router.get('/', optionalAuthMiddleware, ctrl.list); // public, luôn hiển thị đầy đủ món

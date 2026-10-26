@@ -8,6 +8,10 @@ async function findByName(name) {
   return pool.query('SELECT id FROM ingredients WHERE name = ?', [name]);
 }
 
+async function findById(id) {
+  return pool.query('SELECT id, name FROM ingredients WHERE id = ?', [id]);
+}
+
 async function create(name) {
   return pool.query('INSERT INTO ingredients (name) VALUES (?)', [name]);
 }
@@ -20,4 +24,4 @@ async function remove(id) {
   return pool.query('DELETE FROM ingredients WHERE id = ?', [id]);
 }
 
-module.exports = { findAll, findByName, create, update, remove };
+module.exports = { findAll, findByName, findById, create, update, remove };

@@ -104,20 +104,51 @@ CREATE TABLE IF NOT EXISTS ingredients (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ============ 4. DISHES ============
+-- ============ 4. DISH CATEGORIES ============
+CREATE TABLE IF NOT EXISTS dish_categories (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL UNIQUE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+INSERT IGNORE INTO dish_categories (name) VALUES
+  ('Khai vị'),
+  ('Món chính'),
+  ('Món ăn kèm'),
+  ('Đồ uống'),
+  ('Tráng miệng'),
+  ('Khác');
+
+-- ============ 5. DISHES ============
 CREATE TABLE IF NOT EXISTS dishes (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(180) NOT NULL,
   description TEXT NULL,
   price DECIMAL(12,2) NOT NULL,
   category VARCHAR(100) NULL,
+  category_id INT UNSIGNED NULL,
   image_url VARCHAR(500) NULL,
   is_available BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_dishes_category_id (category_id),
+  CONSTRAINT fk_dishes_category FOREIGN KEY (category_id) REFERENCES dish_categories(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ============ 5. DISH_INGREDIENTS ============
+-- ============ 6. DISH_IMAGES ============
+CREATE TABLE IF NOT EXISTS dish_images (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  dish_id INT UNSIGNED NOT NULL,
+  image_url VARCHAR(500) NOT NULL,
+  sort_order SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_dish_images_dish_url (dish_id, image_url),
+  INDEX idx_dish_images_dish_sort (dish_id, sort_order),
+  FOREIGN KEY (dish_id) REFERENCES dishes(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ============ 7. DISH_INGREDIENTS ============
 CREATE TABLE IF NOT EXISTS dish_ingredients (
   dish_id INT UNSIGNED NOT NULL,
   ingredient_id INT UNSIGNED NOT NULL,
@@ -126,7 +157,7 @@ CREATE TABLE IF NOT EXISTS dish_ingredients (
   FOREIGN KEY (ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ============ 6. USER_EXCLUDED_INGREDIENTS ============
+-- ============ 8. USER_EXCLUDED_INGREDIENTS ============
 CREATE TABLE IF NOT EXISTS user_excluded_ingredients (
   user_id INT UNSIGNED NOT NULL,
   ingredient_id INT UNSIGNED NOT NULL,
@@ -136,7 +167,7 @@ CREATE TABLE IF NOT EXISTS user_excluded_ingredients (
   FOREIGN KEY (ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ============ 7. RESTAURANT_TABLES ============
+-- ============ 9. RESTAURANT_TABLES ============
 CREATE TABLE IF NOT EXISTS restaurant_tables (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   table_number VARCHAR(10) NOT NULL UNIQUE,

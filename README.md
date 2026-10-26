@@ -16,6 +16,37 @@ Run `database/schema.sql`, then `database/seed.sql` in MySQL. The seed creates
 the `settings` values used by table validation and a manager account.
 The seeded manager login is `dmn19102005@gmail.com` / `Nhut@1025`.
 
+### Dish categories
+
+On an existing database, run `database/v9_dish_categories_migration.sql` once
+before starting this version. It creates the managed category table and links
+existing dish category names without deleting their current values. New
+installations use the schema in `database/full_setup_database.sql`.
+
+For multiple dish images, also run `database/v10_dish_images_migration.sql`
+once after the categories migration. It matches the `dish_images.dish_id`
+type to the existing `dishes.id` type, including its signed/unsigned setting.
+
+- `GET /api/categories` lists categories and the number of assigned dishes.
+- Managers can add, rename, and delete categories with
+  `POST /api/categories` (`{ "name": "..." }`),
+  `PUT /api/categories/:id` (`{ "name": "..." }`), and
+  `DELETE /api/categories/:id`. Deleting a category assigned to dishes returns
+  `409`; reassign those dishes first.
+- Dish create/update accepts `category_id`. The legacy `category` name is
+  still accepted if it matches an existing category, and dish responses
+  continue returning `category` as the display name.
+- `GET /api/dishes?category_id=<id>` filters by category ID; the existing
+  `category=<name>` filter remains supported.
+- On an existing database, run `database/v10_dish_images_migration.sql` once
+  to create the dish image gallery and migrate each current `image_url` as its
+  first image. Dish create/update accepts `image_urls` (up to 10 URLs) and
+  continues setting the first URL as the legacy `image_url`. Dish detail
+  returns an ordered `images` array; image upload remains manager-only at
+  `POST /api/dishes/upload-image`.
+- Ingredient management already supports public `GET /api/ingredients` and
+  manager-only create, rename, and delete endpoints under `/api/ingredients`.
+
 Authentication endpoints are mounted under `/api/auth`:
 
 - `POST /forgot-password` with `{ "email": "..." }`
