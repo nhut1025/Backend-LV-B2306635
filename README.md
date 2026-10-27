@@ -44,7 +44,10 @@ type to the existing `dishes.id` type, including its signed/unsigned setting.
   continues setting the first URL as the legacy `image_url`. Dish detail
   returns an ordered `images` array; image upload remains manager-only at
   `POST /api/dishes/upload-image`.
-- Ingredient management already supports public `GET /api/ingredients` and
+  - On an existing database, run `database/v11_phase8_refunds_migration.sql`
+    once to add refund attribution, forfeiture timestamps, and the cancelled
+    deposit status used by reservation cancellations.
+  - Ingredient management already supports public `GET /api/ingredients` and
   manager-only create, rename, and delete endpoints under `/api/ingredients`.
 
 Authentication endpoints are mounted under `/api/auth`:
@@ -114,3 +117,31 @@ cashier confirms that the customer agreed and the food should be prepared:
 The reservation must be confirmed (`da_dat`) before the cashier can record a
 call or send the preorder to the kitchen. Repeating the prepare request does
 not add duplicate bill items.
+
+## Reservation Cancellations and Refunds
+
+Customers can cancel an unpaid hold or an eligible reservation from
+`/my-reservations`. A paid deposit is fully refundable when cancellation is at
+least `cancellation_deadline_minutes` before the appointment (45 minutes by
+default); the customer supplies their bank and account details. Later
+cancellations and no-shows forfeit the deposit. No-show detection runs every
+30 seconds and uses `no_show_buffer_minutes` (15 minutes by default).
+
+Reservations cannot be cancelled by the customer or service staff after a
+preorder has been added to a bill and sent to the kitchen. Eligible refund
+requests appear in the manager-only `/pending-refunds` page. Managers transfer
+the money outside the system, then confirm the refund there; the system records
+the manager and completion time. The manager finance page includes completed
+refunds and forfeited deposits in its deposit income/expense ledger.
+
+- `PATCH /api/reservations/:id/cancel` — customer cancellation; refundable
+  cancellations include `refund_bank_code`, `refund_account_number`, and
+  `refund_account_name`. A late cancellation must include
+  `accept_forfeiture: true`.
+- `PATCH /api/reservations/:id/cancel-by-staff` — the same cancellation policy
+  for service staff.
+- `GET /api/reservations/pending-refunds` and
+  `PATCH /api/reservations/:id/confirm-refund` — manager refund queue and
+  confirmation after the manual bank transfer.
+- `GET /api/finance/deposits?from=YYYY-MM-DD&to=YYYY-MM-DD` — completed refund
+  and forfeited-deposit entries for the manager finance report.

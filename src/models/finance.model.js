@@ -91,6 +91,48 @@ function summarize(bills) {
   );
 }
 
+async function listDepositTransactions({ from, to }) {
+  const conditions = [];
+  const params = [];
+  if (from) {
+    conditions.push('transaction_at >= ?');
+    params.push(from);
+  }
+  if (to) {
+    conditions.push('transaction_at < DATE_ADD(?, INTERVAL 1 DAY)');
+    params.push(to);
+  }
+
+  const [rows] = await pool.query(
+    `SELECT transaction_type, reservation_id, amount, transaction_at, handled_by_name
+     FROM (
+       SELECT 'refund' AS transaction_type, d.reservation_id, d.amount,
+              d.refunded_at AS transaction_at, u.full_name AS handled_by_name
+       FROM deposits d
+       LEFT JOIN users u ON u.id = d.refunded_by
+       WHERE d.status = 'da_hoan' AND d.refunded_at IS NOT NULL
+       UNION ALL
+       SELECT 'forfeited' AS transaction_type, d.reservation_id, d.amount,
+              d.forfeited_at AS transaction_at, NULL AS handled_by_name
+       FROM deposits d
+       WHERE d.status = 'mat_coc' AND d.forfeited_at IS NOT NULL
+     ) AS deposit_transactions
+     ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+     ORDER BY transaction_at DESC`,
+    params
+  );
+  const transactions = rows.map((row) => ({
+    ...row,
+    amount: Number(row.amount),
+  }));
+  const totals = transactions.reduce((result, row) => {
+    if (row.transaction_type === 'refund') result.refunded_amount += row.amount;
+    if (row.transaction_type === 'forfeited') result.forfeited_amount += row.amount;
+    return result;
+  }, { refunded_amount: 0, forfeited_amount: 0 });
+  return { transactions, totals };
+}
+
 // Chi tiết một bill bất kỳ: thông tin tiền + người xác nhận + các món.
 async function findBillDetail(billId) {
   const [billRows] = await pool.query(
@@ -160,4 +202,4 @@ async function findBillDetail(billId) {
   };
 }
 
-module.exports = { listBills, summarize, findBillDetail };
+module.exports = { listBills, summarize, listDepositTransactions, findBillDetail };

@@ -57,4 +57,20 @@ async function getBillDetail(req, res, next) {
   }
 }
 
-module.exports = { listBills, getBillDetail };
+async function listDepositTransactions(req, res, next) {
+  try {
+    const { from, to } = req.query;
+    if ((from && !DATE_PATTERN.test(from)) || (to && !DATE_PATTERN.test(to))) {
+      return res.status(400).json({ message: 'from/to phải có dạng YYYY-MM-DD.' });
+    }
+    if (from && to && from > to) {
+      return res.status(400).json({ message: 'Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.' });
+    }
+    const result = await financeModel.listDepositTransactions({ from, to });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { listBills, getBillDetail, listDepositTransactions };

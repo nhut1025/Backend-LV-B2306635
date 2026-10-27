@@ -35,7 +35,7 @@ function initSocket(httpServer) {
 
   io.on('connection', (socket) => {
     const { role } = socket.data.user;
-    if (role === 'kitchen' || role === 'phuc_vu' || role === 'thu_ngan') {
+    if (role === 'kitchen' || role === 'phuc_vu' || role === 'thu_ngan' || role === 'manager') {
       socket.join(role);
     }
   });

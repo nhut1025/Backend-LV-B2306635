@@ -220,16 +220,21 @@ CREATE TABLE IF NOT EXISTS deposits (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   reservation_id INT UNSIGNED NOT NULL UNIQUE,
   amount DECIMAL(10,2) NOT NULL DEFAULT 50000,
-  status ENUM('cho_thanh_toan','da_coc','dang_hoan','da_hoan','hoan_that_bai','mat_coc','da_tru_bill') NOT NULL DEFAULT 'cho_thanh_toan',
+  status ENUM('cho_thanh_toan','da_coc','dang_hoan','da_hoan','hoan_that_bai','mat_coc','da_tru_bill','da_huy') NOT NULL DEFAULT 'cho_thanh_toan',
   transaction_code VARCHAR(100) NULL,
   refund_bank_code VARCHAR(20) NULL,
   refund_account_number VARCHAR(50) NULL,
   refund_account_name VARCHAR(100) NULL,
   refund_transaction_code VARCHAR(100) NULL,
   paid_at DATETIME NULL,
+  confirmed_by INT UNSIGNED NULL,
   refunded_at DATETIME NULL,
+  refunded_by INT UNSIGNED NULL,
+  forfeited_at DATETIME NULL,
   refund_failed_reason VARCHAR(255) NULL,
-  FOREIGN KEY (reservation_id) REFERENCES reservations(id) ON DELETE CASCADE
+  FOREIGN KEY (reservation_id) REFERENCES reservations(id) ON DELETE CASCADE,
+  FOREIGN KEY (confirmed_by) REFERENCES users(id),
+  FOREIGN KEY (refunded_by) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Nếu bảng deposits đã tồn tại từ trước (chưa có 3 cột thông tin hoàn tiền) -> vá lại
@@ -243,6 +248,52 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'deposits' AND column_name = 'refund_account_name');
 SET @sql = IF(@col_exists = 0, "ALTER TABLE deposits ADD COLUMN refund_account_name VARCHAR(100) NULL AFTER refund_account_number", 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @user_id_type = (
+  SELECT COLUMN_TYPE FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'id'
+);
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'deposits' AND column_name = 'refunded_by');
+SET @sql = IF(@col_exists = 0,
+  CONCAT('ALTER TABLE deposits ADD COLUMN refunded_by ', @user_id_type, ' NULL AFTER refunded_at'),
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @refunded_by_type = (
+  SELECT COLUMN_TYPE FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'deposits' AND column_name = 'refunded_by'
+);
+SET @sql = IF(@refunded_by_type <> @user_id_type,
+  CONCAT('ALTER TABLE deposits MODIFY COLUMN refunded_by ', @user_id_type, ' NULL'),
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'deposits' AND column_name = 'forfeited_at');
+SET @sql = IF(@col_exists = 0, "ALTER TABLE deposits ADD COLUMN forfeited_at DATETIME NULL AFTER refunded_by", 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @fk_exists = (
+  SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'deposits'
+    AND COLUMN_NAME = 'refunded_by' AND REFERENCED_TABLE_NAME = 'users'
+);
+SET @sql = IF(@fk_exists = 0,
+  'ALTER TABLE deposits ADD CONSTRAINT fk_deposits_refunded_by FOREIGN KEY (refunded_by) REFERENCES users(id)',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @deposit_status_type = (
+  SELECT COLUMN_TYPE FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'deposits' AND column_name = 'status'
+);
+SET @sql = IF(LOCATE("'da_huy'", @deposit_status_type) = 0,
+  "ALTER TABLE deposits MODIFY COLUMN status ENUM('cho_thanh_toan','da_coc','dang_hoan','da_hoan','hoan_that_bai','mat_coc','da_tru_bill','da_huy') NOT NULL DEFAULT 'cho_thanh_toan'",
+  'SELECT 1'
+);
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- ============ 11. BILLS ============

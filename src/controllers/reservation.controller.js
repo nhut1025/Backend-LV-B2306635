@@ -202,8 +202,74 @@ async function confirmArrival(req, res, next) {
 async function cancelReservationByStaff(req, res, next) {
   try {
     const { id } = req.params;
-    await reservationModel.cancelReservationByStaff(id);
-    res.json({ message: 'Đã hủy đặt bàn thành công. Bàn đã được trả về trạng thái trống.' });
+    const result = await reservationModel.cancelReservation(id, {
+      actor: 'staff',
+      refundBankCode: req.body.refund_bank_code,
+      refundAccountNumber: req.body.refund_account_number,
+      refundAccountName: req.body.refund_account_name,
+      acceptForfeiture: req.body.accept_forfeiture === true,
+    });
+    if (result.refundEligible) {
+      emitToRoom('manager', 'refund:requested', {
+        reservation_id: result.reservationId,
+        amount: result.depositAmount,
+      });
+    }
+    res.json({
+      message: result.refundEligible
+        ? 'Đã hủy đặt bàn. Yêu cầu hoàn cọc đã được gửi đến quản lý.'
+        : result.depositStatus === 'mat_coc'
+          ? 'Đã hủy đặt bàn. Cọc bị mất theo quy định và bàn đã được giải phóng.'
+          : 'Đã hủy lượt giữ bàn chưa thanh toán và giải phóng bàn.',
+      deposit_status: result.depositStatus,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function cancelMyReservation(req, res, next) {
+  try {
+    const result = await reservationModel.cancelReservation(req.params.id, {
+      actor: 'customer',
+      userId: req.user.id,
+      refundBankCode: req.body.refund_bank_code,
+      refundAccountNumber: req.body.refund_account_number,
+      refundAccountName: req.body.refund_account_name,
+      acceptForfeiture: req.body.accept_forfeiture === true,
+    });
+    if (result.refundEligible) {
+      emitToRoom('manager', 'refund:requested', {
+        reservation_id: result.reservationId,
+        amount: result.depositAmount,
+      });
+    }
+    res.json({
+      message: result.refundEligible
+        ? 'Đã hủy đặt bàn. Yêu cầu hoàn cọc đã được gửi đến quản lý.'
+        : result.depositStatus === 'mat_coc'
+          ? 'Đã hủy đặt bàn. Cọc bị mất theo quy định.'
+          : 'Đã hủy lượt giữ bàn chưa thanh toán.',
+      deposit_status: result.depositStatus,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listPendingRefunds(req, res, next) {
+  try {
+    const pending = await reservationModel.findPendingRefunds();
+    res.json({ pending });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function confirmRefund(req, res, next) {
+  try {
+    await reservationModel.confirmRefund(req.params.id, req.user.id);
+    res.json({ message: 'Đã ghi nhận hoàn cọc thành công.' });
   } catch (err) {
     next(err);
   }
@@ -284,4 +350,7 @@ module.exports = {
   listUpcoming,
   confirmArrival,
   cancelReservationByStaff,
+  cancelMyReservation,
+  listPendingRefunds,
+  confirmRefund,
 };

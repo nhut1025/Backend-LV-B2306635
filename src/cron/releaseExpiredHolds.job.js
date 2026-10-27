@@ -5,8 +5,10 @@ async function releaseExpiredHolds() {
   try {
     const expiredIds = await reservationModel.findExpiredHeldReservationIds();
     for (const reservationId of expiredIds) {
-      await reservationModel.releaseExpiredReservation(reservationId);
-      console.log(`[cron] Đã giải phóng bàn giữ tạm hết hạn cho reservation #${reservationId}`);
+      const released = await reservationModel.releaseExpiredReservation(reservationId);
+      if (released) {
+        console.log(`[cron] Đã giải phóng bàn giữ tạm hết hạn cho reservation #${reservationId}`);
+      }
     }
   } catch (err) {
     console.error('[cron] Lỗi khi giải phóng bàn giữ tạm hết hạn:', err.message);
