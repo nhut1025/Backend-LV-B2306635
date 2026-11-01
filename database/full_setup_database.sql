@@ -314,6 +314,23 @@ CREATE TABLE IF NOT EXISTS bills (
   FOREIGN KEY (deposit_id) REFERENCES deposits(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS table_transfers (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  reservation_id INT UNSIGNED NULL,
+  bill_id INT UNSIGNED NULL,
+  from_table_id INT UNSIGNED NOT NULL,
+  to_table_id INT UNSIGNED NOT NULL,
+  moved_by INT UNSIGNED NULL,
+  moved_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (reservation_id) REFERENCES reservations(id) ON DELETE SET NULL,
+  FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE SET NULL,
+  FOREIGN KEY (from_table_id) REFERENCES restaurant_tables(id),
+  FOREIGN KEY (to_table_id) REFERENCES restaurant_tables(id),
+  FOREIGN KEY (moved_by) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_table_transfers_reservation (reservation_id),
+  INDEX idx_table_transfers_moved_at (moved_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'bills' AND column_name = 'paid_by');
 SET @sql = IF(@col_exists = 0, "ALTER TABLE bills ADD COLUMN paid_by INT UNSIGNED NULL AFTER payment_code", 'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -343,6 +360,42 @@ SET @sql = IF(@col_exists = 0,
   'SELECT 1'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- ============ 12B. BILL REVIEWS ============
+CREATE TABLE IF NOT EXISTS bill_reviews (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  bill_id INT UNSIGNED NOT NULL UNIQUE,
+  user_id INT UNSIGNED NOT NULL,
+  rating TINYINT UNSIGNED NOT NULL,
+  food_rating TINYINT UNSIGNED NULL,
+  service_rating TINYINT UNSIGNED NULL,
+  ambience_rating TINYINT UNSIGNED NULL,
+  comment TEXT NOT NULL,
+  manager_reply TEXT NULL,
+  replied_by INT UNSIGNED NULL,
+  replied_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT chk_bill_reviews_rating CHECK (rating BETWEEN 1 AND 5),
+  CONSTRAINT chk_bill_reviews_category_ratings CHECK (
+    (food_rating IS NULL OR food_rating BETWEEN 1 AND 5)
+    AND (service_rating IS NULL OR service_rating BETWEEN 1 AND 5)
+    AND (ambience_rating IS NULL OR ambience_rating BETWEEN 1 AND 5)
+  ),
+  FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (replied_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS bill_review_items (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  bill_review_id INT UNSIGNED NOT NULL,
+  bill_item_id INT UNSIGNED NOT NULL,
+  sentiment ENUM('like','dislike') NOT NULL,
+  UNIQUE KEY uq_bill_review_item (bill_review_id, bill_item_id),
+  FOREIGN KEY (bill_review_id) REFERENCES bill_reviews(id) ON DELETE CASCADE,
+  FOREIGN KEY (bill_item_id) REFERENCES bill_items(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============ 12A. RESERVATION PREORDERS ============
 CREATE TABLE IF NOT EXISTS reservation_preorders (
@@ -499,6 +552,7 @@ INSERT IGNORE INTO settings (setting_key, setting_value) VALUES
   ('cancellation_deadline_minutes', '45'),
   ('no_show_buffer_minutes', '15'),
   ('reservation_hold_minutes', '3'),
+  ('table_transfer_duration_minutes', '120'),
   ('table_capacity_min', '1'),
   ('table_capacity_max', '16'),
   ('deposit_amount', '50000'),

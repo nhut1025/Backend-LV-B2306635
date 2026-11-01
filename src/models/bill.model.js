@@ -13,27 +13,94 @@ async function findOpenBillByTableId(tableId) {
 async function getOrCreateOpenBill(tableId) {
   const conn = await pool.getConnection();
   try {
+    await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
     await conn.beginTransaction();
 
-    const [tableRows] = await conn.query(
-        `SELECT id, status, current_reservation_id FROM restaurant_tables WHERE id = ? FOR UPDATE`,
+    const [initialTableRows] = await conn.query(
+      `SELECT id, status, current_reservation_id
+       FROM restaurant_tables WHERE id = ?`,
       [tableId]
     );
-    if (tableRows.length === 0) {
+    if (initialTableRows.length === 0) {
       const err = new Error('Không tìm thấy bàn.');
       err.status = 404;
       throw err;
     }
-    if (tableRows[0].status !== 'co_khach') {
+
+    const reservationId = initialTableRows[0].current_reservation_id;
+    let tableRows;
+    let representativeTableId = Number(tableId);
+    if (reservationId) {
+      const [reservationRows] = await conn.query(
+        `SELECT id, status FROM reservations WHERE id = ? FOR UPDATE`,
+        [reservationId]
+      );
+      if (reservationRows.length === 0 || reservationRows[0].status !== 'da_dat') {
+        const err = new Error('Đặt bàn không còn ở trạng thái đang phục vụ.');
+        err.status = 409;
+        throw err;
+      }
+
+      const [groupTables] = await conn.query(
+        `SELECT id FROM restaurant_tables
+         WHERE current_reservation_id = ? AND status = 'co_khach'
+         ORDER BY id`,
+        [reservationId]
+      );
+      const lockedGroupTables = [];
+      for (const table of groupTables) {
+        const [rows] = await conn.query(
+          `SELECT id, status, current_reservation_id
+           FROM restaurant_tables WHERE id = ? FOR UPDATE`,
+          [table.id]
+        );
+        if (rows[0]) lockedGroupTables.push(rows[0]);
+      }
+      tableRows = lockedGroupTables.filter((table) => Number(table.id) === Number(tableId));
+      if (tableRows.length === 0 || tableRows[0].status !== 'co_khach'
+        || Number(tableRows[0].current_reservation_id) !== Number(reservationId)) {
+        const err = new Error('Bàn hiện không có khách của đặt chỗ này.');
+        err.status = 409;
+        throw err;
+      }
+      if (lockedGroupTables.length === 0) {
+        const err = new Error('Không tìm thấy bàn đang phục vụ cho đặt chỗ này.');
+        err.status = 409;
+        throw err;
+      }
+      representativeTableId = Math.min(...lockedGroupTables.map((table) => Number(table.id)));
+    } else {
+      const [lockedTableRows] = await conn.query(
+        `SELECT id, status, current_reservation_id
+         FROM restaurant_tables WHERE id = ? FOR UPDATE`,
+        [tableId]
+      );
+      tableRows = lockedTableRows;
+    }
+
+    if (tableRows.length === 0 || tableRows[0].status !== 'co_khach') {
       const err = new Error('Bàn hiện không có khách, không thể mở bill.');
       err.status = 409;
       throw err;
     }
 
-    const [existingBill] = await conn.query(
-      `SELECT id FROM bills WHERE table_id = ? AND status = 'mo' ORDER BY id DESC LIMIT 1`,
-      [tableId]
-    );
+    // The request may have waited on the reservation lock; read the latest bill state.
+    const [existingBill] = reservationId
+      ? await conn.query(
+        `SELECT id, status, payment_method FROM bills
+         WHERE reservation_id = ? AND status = 'mo' ORDER BY id`,
+        [reservationId]
+      )
+      : await conn.query(
+        `SELECT id, status, payment_method FROM bills
+         WHERE table_id = ? AND status = 'mo' ORDER BY id DESC LIMIT 1`,
+        [tableId]
+      );
+    if (existingBill.length > 1) {
+      const err = new Error('Đặt bàn đang có nhiều bill mở. Vui lòng xử lý bill trước khi gọi thêm món.');
+      err.status = 409;
+      throw err;
+    }
     if (existingBill.length > 0) {
       await conn.commit();
       return existingBill[0].id;
@@ -41,7 +108,7 @@ async function getOrCreateOpenBill(tableId) {
 
     const [insertResult] = await conn.query(
       `INSERT INTO bills (table_id, reservation_id, status) VALUES (?, ?, 'mo')`,
-      [tableId, tableRows[0].current_reservation_id || null]
+      [representativeTableId, reservationId || null]
     );
 
     await conn.commit();
@@ -56,7 +123,12 @@ async function getOrCreateOpenBill(tableId) {
 
 // Lấy chi tiết bill + danh sách món (bỏ món đã xoá mềm)
 async function findBillWithItems(billId) {
-  const [billRows] = await pool.query(`SELECT * FROM bills WHERE id = ?`, [billId]);
+  const [billRows] = await pool.query(
+    `SELECT b.*, t.table_number FROM bills b
+     JOIN restaurant_tables t ON t.id = b.table_id
+     WHERE b.id = ?`,
+    [billId]
+  );
   if (billRows.length === 0) return null;
 
   const [items] = await pool.query(
@@ -79,13 +151,20 @@ async function findMyPaidBillHistory(userId) {
             b.payment_method, b.payment_code, b.created_at, b.paid_at,
             b.paid_by AS cashier_id, cashier.full_name AS cashier_name,
             d.confirmed_by AS deposit_confirmed_by_id,
-            deposit_cashier.full_name AS deposit_confirmed_by_name
+            deposit_cashier.full_name AS deposit_confirmed_by_name,
+            br.id AS review_id, br.rating AS review_rating,
+            br.food_rating AS review_food_rating,
+            br.service_rating AS review_service_rating,
+            br.ambience_rating AS review_ambience_rating,
+            br.comment AS review_comment,
+            br.created_at AS review_created_at, br.updated_at AS review_updated_at
      FROM bills b
      JOIN reservations r ON r.id = b.reservation_id
      JOIN restaurant_tables t ON t.id = b.table_id
      LEFT JOIN deposits d ON d.id = b.deposit_id
      LEFT JOIN users cashier ON cashier.id = b.paid_by
      LEFT JOIN users deposit_cashier ON deposit_cashier.id = d.confirmed_by
+     LEFT JOIN bill_reviews br ON br.bill_id = b.id AND br.user_id = r.user_id
      WHERE r.user_id = ? AND b.status = 'da_thanh_toan'
        AND b.payment_method IS NOT NULL
      ORDER BY b.paid_at DESC, b.id DESC`,
@@ -96,9 +175,11 @@ async function findMyPaidBillHistory(userId) {
   const billIds = bills.map((bill) => bill.id);
   const [items] = await pool.query(
     `SELECT bi.id, bi.bill_id, bi.dish_id, d.name AS dish_name,
-            bi.quantity, bi.unit_price, bi.note, bi.status
+            bi.quantity, bi.unit_price, bi.note, bi.status, bri.sentiment AS review_sentiment
      FROM bill_items bi
      JOIN dishes d ON d.id = bi.dish_id
+     LEFT JOIN bill_reviews br ON br.bill_id = bi.bill_id
+     LEFT JOIN bill_review_items bri ON bri.bill_review_id = br.id AND bri.bill_item_id = bi.id
      WHERE bi.bill_id IN (?) AND bi.deleted_at IS NULL
      ORDER BY bi.created_at ASC, bi.id ASC`,
     [billIds]
@@ -116,6 +197,16 @@ async function findMyPaidBillHistory(userId) {
       total_amount: totalAmount,
       deposit_amount: depositAmount,
       amount_paid: Math.max(0, totalAmount - depositAmount),
+      review: bill.review_id ? {
+        id: bill.review_id,
+        rating: Number(bill.review_rating),
+        food_rating: bill.review_food_rating === null ? null : Number(bill.review_food_rating),
+        service_rating: bill.review_service_rating === null ? null : Number(bill.review_service_rating),
+        ambience_rating: bill.review_ambience_rating === null ? null : Number(bill.review_ambience_rating),
+        comment: bill.review_comment,
+        created_at: bill.review_created_at,
+        updated_at: bill.review_updated_at,
+      } : null,
       items: itemsByBill.get(bill.id).map((item) => ({
         ...item,
         unit_price: Number(item.unit_price),
@@ -123,6 +214,226 @@ async function findMyPaidBillHistory(userId) {
       })),
     };
   });
+}
+
+async function savePaidBillReview(
+  billId,
+  userId,
+  { rating, foodRating, serviceRating, ambienceRating, comment, itemFeedback },
+  isEdit
+) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [billRows] = await conn.query(
+      `SELECT b.id, b.status, r.user_id
+       FROM bills b
+       JOIN reservations r ON r.id = b.reservation_id
+       WHERE b.id = ?
+       FOR UPDATE`,
+      [billId]
+    );
+    if (billRows.length === 0 || Number(billRows[0].user_id) !== Number(userId)) {
+      const err = new Error('Không tìm thấy bill đã thanh toán của bạn.');
+      err.status = 404;
+      throw err;
+    }
+    if (billRows[0].status !== 'da_thanh_toan') {
+      const err = new Error('Chỉ có thể đánh giá bill đã thanh toán.');
+      err.status = 409;
+      throw err;
+    }
+
+    const [itemRows] = await conn.query(
+      `SELECT id FROM bill_items
+       WHERE bill_id = ? AND deleted_at IS NULL
+       ORDER BY id ASC
+       FOR UPDATE`,
+      [billId]
+    );
+    const billItemIds = itemRows.map((item) => Number(item.id));
+    const feedbackIds = itemFeedback.map((item) => item.bill_item_id).sort((a, b) => a - b);
+    if (billItemIds.length !== feedbackIds.length
+      || billItemIds.some((id, index) => id !== feedbackIds[index])) {
+      const err = new Error('Vui lòng chọn thích hoặc không thích cho từng món trong bill.');
+      err.status = 400;
+      throw err;
+    }
+
+    const [reviewRows] = await conn.query(
+      `SELECT id FROM bill_reviews WHERE bill_id = ? FOR UPDATE`,
+      [billId]
+    );
+    let reviewId;
+    if (isEdit) {
+      if (reviewRows.length === 0) {
+        const err = new Error('Bill này chưa có đánh giá để chỉnh sửa.');
+        err.status = 404;
+        throw err;
+      }
+      reviewId = reviewRows[0].id;
+      await conn.query(
+        `UPDATE bill_reviews
+         SET rating = ?, food_rating = ?, service_rating = ?, ambience_rating = ?, comment = ?
+         WHERE id = ?`,
+        [rating, foodRating, serviceRating, ambienceRating, comment, reviewId]
+      );
+    } else {
+      if (reviewRows.length > 0) {
+        const err = new Error('Bill này đã được đánh giá. Bạn có thể chỉnh sửa đánh giá hiện có.');
+        err.status = 409;
+        throw err;
+      }
+      const [result] = await conn.query(
+        `INSERT INTO bill_reviews
+          (bill_id, user_id, rating, food_rating, service_rating, ambience_rating, comment)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [billId, userId, rating, foodRating, serviceRating, ambienceRating, comment]
+      );
+      reviewId = result.insertId;
+    }
+
+    for (const item of itemFeedback) {
+      const [existingFeedback] = await conn.query(
+        `SELECT id FROM bill_review_items
+         WHERE bill_review_id = ? AND bill_item_id = ?`,
+        [reviewId, item.bill_item_id]
+      );
+      if (existingFeedback.length > 0) {
+        await conn.query(
+          `UPDATE bill_review_items SET sentiment = ? WHERE id = ?`,
+          [item.sentiment, existingFeedback[0].id]
+        );
+      } else {
+        await conn.query(
+          `INSERT INTO bill_review_items (bill_review_id, bill_item_id, sentiment)
+           VALUES (?, ?, ?)`,
+          [reviewId, item.bill_item_id, item.sentiment]
+        );
+      }
+    }
+
+    const [savedRows] = await conn.query(
+      `SELECT id, rating, food_rating, service_rating, ambience_rating, comment, created_at, updated_at
+       FROM bill_reviews WHERE id = ?`,
+      [reviewId]
+    );
+    await conn.commit();
+    return {
+      ...savedRows[0],
+      rating: Number(savedRows[0].rating),
+      food_rating: Number(savedRows[0].food_rating),
+      service_rating: Number(savedRows[0].service_rating),
+      ambience_rating: Number(savedRows[0].ambience_rating),
+      item_feedback: itemFeedback,
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function findRestaurantReviews({ rating, limit, offset }) {
+  const [summaryRows] = await pool.query(
+    `SELECT COUNT(*) AS review_count,
+            COALESCE(AVG(br.rating), 0) AS average_rating,
+            COALESCE(AVG(br.food_rating), 0) AS food_rating,
+            COALESCE(AVG(br.service_rating), 0) AS service_rating,
+            COALESCE(AVG(br.ambience_rating), 0) AS ambience_rating,
+            COUNT(br.food_rating) AS food_rating_count,
+            COUNT(br.service_rating) AS service_rating_count,
+            COUNT(br.ambience_rating) AS ambience_rating_count
+     FROM bill_reviews br
+     JOIN bills b ON b.id = br.bill_id AND b.status = 'da_thanh_toan'
+     JOIN reservations r ON r.id = b.reservation_id AND r.user_id = br.user_id
+    `
+  );
+  const [countRows] = await pool.query(
+    `SELECT COUNT(*) AS filtered_count
+     FROM bill_reviews br
+     JOIN bills b ON b.id = br.bill_id AND b.status = 'da_thanh_toan'
+     JOIN reservations r ON r.id = b.reservation_id AND r.user_id = br.user_id
+     WHERE (? IS NULL OR br.rating = ? OR (? = 2 AND br.rating <= 2))`,
+    [rating, rating, rating]
+  );
+  const [rows] = await pool.query(
+    `    SELECT br.id, br.rating, br.food_rating, br.service_rating, br.ambience_rating,
+           br.comment, br.created_at, br.updated_at, b.paid_at,
+           br.manager_reply, br.replied_at, manager.full_name AS manager_name
+    FROM bill_reviews br
+    JOIN bills b ON b.id = br.bill_id AND b.status = 'da_thanh_toan'
+    JOIN reservations r ON r.id = b.reservation_id AND r.user_id = br.user_id
+    LEFT JOIN users manager ON manager.id = br.replied_by
+     WHERE (? IS NULL OR br.rating = ? OR (? = 2 AND br.rating <= 2))
+     ORDER BY br.created_at DESC, br.id DESC
+     LIMIT ? OFFSET ?`,
+    [rating, rating, rating, limit, offset]
+  );
+  return {
+    summary: {
+      review_count: Number(summaryRows[0].review_count),
+      average_rating: Number(summaryRows[0].average_rating),
+      food_rating: Number(summaryRows[0].food_rating),
+      service_rating: Number(summaryRows[0].service_rating),
+      ambience_rating: Number(summaryRows[0].ambience_rating),
+      food_rating_count: Number(summaryRows[0].food_rating_count),
+      service_rating_count: Number(summaryRows[0].service_rating_count),
+      ambience_rating_count: Number(summaryRows[0].ambience_rating_count),
+    },
+    filtered_count: Number(countRows[0].filtered_count),
+    reviews: rows.map((row) => ({
+      ...row,
+      rating: Number(row.rating),
+      food_rating: row.food_rating === null ? null : Number(row.food_rating),
+      service_rating: row.service_rating === null ? null : Number(row.service_rating),
+      ambience_rating: row.ambience_rating === null ? null : Number(row.ambience_rating),
+    })),
+  };
+}
+
+async function saveManagerReviewReply(reviewId, managerId, reply) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [reviewRows] = await conn.query(
+      `SELECT br.id
+       FROM bill_reviews br
+       JOIN bills b ON b.id = br.bill_id AND b.status = 'da_thanh_toan'
+       JOIN reservations r ON r.id = b.reservation_id AND r.user_id = br.user_id
+       WHERE br.id = ?
+       FOR UPDATE`,
+      [reviewId]
+    );
+    if (reviewRows.length === 0) {
+      const err = new Error('Không tìm thấy đánh giá của bill đã thanh toán.');
+      err.status = 404;
+      throw err;
+    }
+
+    await conn.query(
+      `UPDATE bill_reviews
+       SET manager_reply = ?, replied_by = ?, replied_at = NOW()
+       WHERE id = ?`,
+      [reply, managerId, reviewId]
+    );
+    const [savedRows] = await conn.query(
+      `SELECT br.id, br.manager_reply, br.replied_at, u.full_name AS manager_name
+       FROM bill_reviews br
+       LEFT JOIN users u ON u.id = br.replied_by
+       WHERE br.id = ?`,
+      [reviewId]
+    );
+    await conn.commit();
+    return savedRows[0];
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 }
 
 // Thêm món — chốt giá tại thời điểm gọi món (unit_price không tham chiếu dishes.price về sau)
@@ -533,12 +844,31 @@ async function payBill(billId, paymentMethod, cashierId) {
       [summary.subtotal, summary.deposit_id, paymentMethod, paymentCode, cashierId, billId]
     );  
 
-    await conn.query(
-      `UPDATE restaurant_tables
-       SET status = 'trong', locked_by = NULL, locked_until = NULL, current_reservation_id = NULL
-       WHERE id = ?`,
-      [bill.table_id]
-    );
+    let remainingOpenBills = 0;
+    if (bill.reservation_id) {
+      const [openBillRows] = await conn.query(
+        `SELECT COUNT(*) AS bill_count
+         FROM bills WHERE reservation_id = ? AND status = 'mo'`,
+        [bill.reservation_id]
+      );
+      remainingOpenBills = Number(openBillRows[0].bill_count);
+    }
+
+    if (bill.reservation_id && remainingOpenBills === 0) {
+      await conn.query(
+        `UPDATE restaurant_tables
+         SET status = 'trong', locked_by = NULL, locked_until = NULL, current_reservation_id = NULL
+         WHERE current_reservation_id = ? AND status = 'co_khach'`,
+        [bill.reservation_id]
+      );
+    } else {
+      await conn.query(
+        `UPDATE restaurant_tables
+         SET status = 'trong', locked_by = NULL, locked_until = NULL, current_reservation_id = NULL
+         WHERE id = ? AND status = 'co_khach'`,
+        [bill.table_id]
+      );
+    }
 
     // Đặt bàn ghép nhiều bàn: chỉ hoàn tất đặt bàn khi KHÔNG còn bàn nào của đơn này đang có khách.
     if (bill.reservation_id) {
@@ -575,6 +905,9 @@ module.exports = {
   getOrCreateOpenBill,
   findBillWithItems,
   findMyPaidBillHistory,
+  savePaidBillReview,
+  findRestaurantReviews,
+  saveManagerReviewReply,
   addItem,
   removeItem,
   findKitchenQueue,

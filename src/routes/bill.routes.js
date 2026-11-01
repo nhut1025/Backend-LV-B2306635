@@ -5,6 +5,10 @@ const ctrl = require('../controllers/bill.controller');
 const { authMiddleware, requireRole } = require('../middlewares/auth.middleware');
 
 router.get('/my-history', authMiddleware, requireRole('customer'), ctrl.listMyHistory);
+router.get('/reviews', ctrl.listRestaurantReviews);
+router.put('/reviews/:reviewId/reply', authMiddleware, requireRole('manager'), ctrl.replyToBillReview);
+router.post('/:billId/review', authMiddleware, requireRole('customer'), ctrl.createBillReview);
+router.put('/:billId/review', authMiddleware, requireRole('customer'), ctrl.updateBillReview);
 router.get('/table/:tableId', authMiddleware, requireRole('phuc_vu'), ctrl.getByTable);
 router.post('/:billId/items', authMiddleware, requireRole('phuc_vu'), ctrl.addItem);
 router.delete('/:billId/items/:itemId', authMiddleware, requireRole('phuc_vu'), ctrl.removeItem);

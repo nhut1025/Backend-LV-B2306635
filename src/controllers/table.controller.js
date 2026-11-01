@@ -1,10 +1,21 @@
 
 const { getCapacityRange } = require('../utils/settings');
 const tableModel = require('../models/table.model');
+const tableTransferModel = require('../models/tableTransfer.model');
+const { emitToRoom } = require('../utils/socket');
 
 async function list(req, res, next) {
   try {
     const rows = await tableModel.findAll();
+    res.json({ tables: rows });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listOperational(req, res, next) {
+  try {
+    const rows = await tableModel.findAllOperational();
     res.json({ tables: rows });
   } catch (err) {
     next(err);
@@ -128,4 +139,31 @@ async function releaseTable(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove, assignWalkIn, releaseTable };
+async function transferOccupiedTable(req, res, next) {
+  try {
+    const result = await tableTransferModel.transferTables({
+      sourceTableId: Number(req.params.id),
+      targetTableIds: [req.body.to_table_id],
+      staffId: req.user.id,
+    });
+    if (result.changed) {
+      for (const item of result.queueItems) emitToRoom('kitchen', 'kitchen:item-updated', item);
+      emitToRoom('phuc_vu', 'service:table-transferred', result);
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  list,
+  listOperational,
+  getById,
+  create,
+  update,
+  remove,
+  assignWalkIn,
+  releaseTable,
+  transferOccupiedTable,
+};

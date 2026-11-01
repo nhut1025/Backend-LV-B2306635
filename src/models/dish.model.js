@@ -56,6 +56,49 @@ async function findById(id) {
   return { dishResult, ingredientResult, imageResult };
 }
 
+async function findPublicReviewsByDishId(dishId) {
+  const [dishRows] = await pool.query('SELECT id FROM dishes WHERE id = ?', [dishId]);
+  if (dishRows.length === 0) return null;
+
+  const [summaryRows] = await pool.query(
+    `SELECT COUNT(DISTINCT bri.id) AS review_count,
+            SUM(CASE WHEN bri.sentiment = 'like' THEN 1 ELSE 0 END) AS like_count,
+            SUM(CASE WHEN bri.sentiment = 'dislike' THEN 1 ELSE 0 END) AS dislike_count
+     FROM bill_review_items bri
+     JOIN bill_items bi ON bi.id = bri.bill_item_id
+     JOIN bill_reviews br ON br.id = bri.bill_review_id
+     JOIN bills b ON b.id = br.bill_id AND b.status = 'da_thanh_toan'
+     JOIN reservations r ON r.id = b.reservation_id AND r.user_id = br.user_id
+     WHERE bi.dish_id = ? AND bi.deleted_at IS NULL`,
+    [dishId]
+  );
+  const [reviews] = await pool.query(
+    `SELECT br.id, bri.id AS feedback_id, br.comment, br.created_at, bri.sentiment,
+            br.manager_reply, br.replied_at, manager.full_name AS manager_name
+     FROM bill_review_items bri
+     JOIN bill_items bi ON bi.id = bri.bill_item_id
+     JOIN bill_reviews br ON br.id = bri.bill_review_id
+     JOIN bills b ON b.id = br.bill_id AND b.status = 'da_thanh_toan'
+     JOIN reservations r ON r.id = b.reservation_id AND r.user_id = br.user_id
+     LEFT JOIN users manager ON manager.id = br.replied_by
+     WHERE bi.dish_id = ? AND bi.deleted_at IS NULL
+     ORDER BY br.created_at DESC, br.id DESC
+     LIMIT 30`,
+    [dishId]
+  );
+
+  return {
+    summary: {
+      review_count: Number(summaryRows[0].review_count),
+      like_count: Number(summaryRows[0].like_count || 0),
+      dislike_count: Number(summaryRows[0].dislike_count || 0),
+    },
+    reviews: reviews.map((review) => ({
+      ...review,
+    })),
+  };
+}
+
 async function syncImages(connection, dishId, imageUrls) {
   await connection.query('DELETE FROM dish_images WHERE dish_id = ?', [dishId]);
   if (imageUrls.length > 0) {
@@ -121,6 +164,7 @@ module.exports = {
   findExcludedIngredientIds,
   findAll,
   findById,
+  findPublicReviewsByDishId,
   syncImages,
   create,
   update,

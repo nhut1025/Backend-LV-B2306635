@@ -88,6 +88,24 @@ async function getById(req, res, next) {
   }
 }
 
+async function getPublicReviews(req, res, next) {
+  try {
+    const { id } = req.params;
+    if (!/^\d+$/.test(String(id)) || Number(id) < 1) {
+      return res.status(400).json({ message: 'ID món ăn không hợp lệ.' });
+    }
+
+    const result = await dishModel.findPublicReviewsByDishId(id);
+    if (!result) {
+      return res.status(404).json({ message: 'Không tìm thấy món ăn.' });
+    }
+
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 function uploadImage(req, res) {
   if (!req.file) {
     return res.status(400).json({ message: 'Vui lòng chọn một file hình ảnh hợp lệ.' });
@@ -215,4 +233,13 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { list, getById, uploadImage, create, update, toggleAvailability, remove };
+module.exports = {
+  list,
+  getById,
+  getPublicReviews,
+  uploadImage,
+  create,
+  update,
+  toggleAvailability,
+  remove,
+};

@@ -1,4 +1,5 @@
 const reservationModel = require('../models/reservation.model');
+const tableTransferModel = require('../models/tableTransfer.model');
 const { emitToRoom } = require('../utils/socket');
 const { getBankConfig } = require('../utils/settings');
 const { buildVietQrUrl } = require('../utils/vietqr');
@@ -181,7 +182,8 @@ async function getMineById(req, res, next) {
 async function listUpcoming(req, res, next) {
   try {
     const rows = await reservationModel.findUpcomingReservations();
-    res.json({ upcoming: rows });
+    const recoverable = await reservationModel.findRecoverableStaffCancellations();
+    res.json({ upcoming: rows, recoverable });
   } catch (err) {
     next(err);
   }
@@ -193,6 +195,35 @@ async function confirmArrival(req, res, next) {
     const { id } = req.params;
     await reservationModel.confirmArrival(id);
     res.json({ message: 'Đã xác nhận khách đến. Bàn chuyển sang trạng thái có khách.' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function transferTables(req, res, next) {
+  try {
+    const result = await tableTransferModel.transferTables({
+      reservationId: Number(req.params.id),
+      targetTableIds: req.body.table_ids,
+      staffId: req.user.id,
+    });
+    if (result.changed) {
+      for (const item of result.queueItems) emitToRoom('kitchen', 'kitchen:item-updated', item);
+      emitToRoom('phuc_vu', 'service:table-transferred', result);
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function restoreStaffCancelledReservation(req, res, next) {
+  try {
+    const result = await reservationModel.restoreStaffCancelledReservation(req.params.id);
+    res.json({
+      message: `Đã khôi phục đặt bàn và tiền cọc. Bàn ${result.tableNumbers} đã được giữ cho khách.`,
+      table_numbers: result.tableNumbers,
+    });
   } catch (err) {
     next(err);
   }
@@ -222,6 +253,8 @@ async function cancelReservationByStaff(req, res, next) {
           ? 'Đã hủy đặt bàn. Cọc bị mất theo quy định và bàn đã được giải phóng.'
           : 'Đã hủy lượt giữ bàn chưa thanh toán và giải phóng bàn.',
       deposit_status: result.depositStatus,
+      cancelled_by: result.cancelledBy,
+      cancelled_at: result.cancelledAt,
     });
   } catch (err) {
     next(err);
@@ -251,6 +284,8 @@ async function cancelMyReservation(req, res, next) {
           ? 'Đã hủy đặt bàn. Cọc bị mất theo quy định.'
           : 'Đã hủy lượt giữ bàn chưa thanh toán.',
       deposit_status: result.depositStatus,
+      cancelled_by: result.cancelledBy,
+      cancelled_at: result.cancelledAt,
     });
   } catch (err) {
     next(err);
@@ -349,6 +384,8 @@ module.exports = {
   confirmDeposit,
   listUpcoming,
   confirmArrival,
+  transferTables,
+  restoreStaffCancelledReservation,
   cancelReservationByStaff,
   cancelMyReservation,
   listPendingRefunds,

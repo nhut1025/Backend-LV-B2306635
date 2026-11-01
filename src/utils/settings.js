@@ -29,6 +29,10 @@ async function getCapacityRange() {
   return { min, max };
 }
 
+async function getTableTransferDuration() {
+  return parseInt(await getSetting('table_transfer_duration_minutes', '120'), 10);
+}
+
 async function getBankConfig() {
   const bankBin = await getSetting('restaurant_bank_bin', '');
   const accountNumber = await getSetting('restaurant_account_number', '');
@@ -47,4 +51,11 @@ async function setBankConfig({ bank_bin, account_number, account_name }) {
   await setSetting('restaurant_account_name', account_name);
 }
 
-module.exports = { getSetting, setSetting, getCapacityRange, getBankConfig, setBankConfig };
+module.exports = {
+  getSetting,
+  setSetting,
+  getCapacityRange,
+  getTableTransferDuration,
+  getBankConfig,
+  setBankConfig,
+};

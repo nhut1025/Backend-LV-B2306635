@@ -24,6 +24,7 @@ const imageUpload = multer({
 });
 
 router.get('/', optionalAuthMiddleware, ctrl.list); // public, luôn hiển thị đầy đủ món
+router.get('/:id/reviews', ctrl.getPublicReviews);
 router.get('/:id', optionalAuthMiddleware, ctrl.getById);
 router.post('/upload-image', authMiddleware, requireRole('manager'), imageUpload.single('image'), ctrl.uploadImage);
 router.post('/', authMiddleware, requireRole('manager'), ctrl.create);

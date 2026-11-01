@@ -24,6 +24,148 @@ async function listMyHistory(req, res, next) {
   }
 }
 
+function validateBillReview(body) {
+  const {
+    rating,
+    food_rating: foodRating,
+    service_rating: serviceRating,
+    ambience_rating: ambienceRating,
+    comment,
+    item_feedback: itemFeedback,
+  } = (
+    body && typeof body === 'object' ? body : {}
+  );
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    const err = new Error('Đánh giá tổng thể phải từ 1 đến 5 sao.');
+    err.status = 400;
+    throw err;
+  }
+  for (const [label, value] of [
+    ['món ăn', foodRating],
+    ['phục vụ', serviceRating],
+    ['không gian', ambienceRating],
+  ]) {
+    if (!Number.isInteger(value) || value < 1 || value > 5) {
+      const err = new Error(`Đánh giá ${label} phải từ 1 đến 5 sao.`);
+      err.status = 400;
+      throw err;
+    }
+  }
+  if (typeof comment !== 'string' || !comment.trim() || comment.trim().length > 2000) {
+    const err = new Error('Vui lòng nhập bình luận từ 1 đến 2000 ký tự.');
+    err.status = 400;
+    throw err;
+  }
+  if (!Array.isArray(itemFeedback) || itemFeedback.some((item) => (
+    !item || typeof item !== 'object'
+    || !Number.isInteger(item.bill_item_id)
+    || item.bill_item_id < 1
+    || !['like', 'dislike'].includes(item.sentiment)
+  ))) {
+    const err = new Error('Phản hồi từng món không hợp lệ.');
+    err.status = 400;
+    throw err;
+  }
+  const itemIds = itemFeedback.map((item) => item.bill_item_id);
+  if (new Set(itemIds).size !== itemIds.length) {
+    const err = new Error('Mỗi món chỉ được đánh giá một lần trong bill.');
+    err.status = 400;
+    throw err;
+  }
+  return {
+    rating,
+    foodRating,
+    serviceRating,
+    ambienceRating,
+    comment: comment.trim(),
+    itemFeedback,
+  };
+}
+
+async function listRestaurantReviews(req, res, next) {
+  try {
+    const rawRating = req.query.rating;
+    let rating = null;
+    if (rawRating !== undefined && rawRating !== 'all') {
+      if (!['2', '3', '4', '5'].includes(String(rawRating))) {
+        return res.status(400).json({ message: 'Bộ lọc số sao không hợp lệ.' });
+      }
+      rating = Number(rawRating);
+    }
+    const rawPage = req.query.page === undefined ? '1' : String(req.query.page);
+    if (!/^[1-9]\d*$/.test(rawPage)) {
+      return res.status(400).json({ message: 'Số trang không hợp lệ.' });
+    }
+    const page = Number(rawPage);
+    if (!Number.isSafeInteger(page)) {
+      return res.status(400).json({ message: 'Số trang không hợp lệ.' });
+    }
+    const perPage = 20;
+    const offset = (page - 1) * perPage;
+    if (!Number.isSafeInteger(offset) || offset > 10000000) {
+      return res.status(400).json({ message: 'Số trang vượt quá giới hạn.' });
+    }
+    const result = await billModel.findRestaurantReviews({
+      rating,
+      limit: perPage,
+      offset,
+    });
+    res.json({
+      ...result,
+      page,
+      per_page: perPage,
+      total_pages: Math.ceil(result.filtered_count / perPage),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function replyToBillReview(req, res, next) {
+  try {
+    const { reviewId } = req.params;
+    if (!/^\d+$/.test(String(reviewId)) || !Number.isSafeInteger(Number(reviewId)) || Number(reviewId) < 1) {
+      return res.status(400).json({ message: 'ID đánh giá không hợp lệ.' });
+    }
+    const reply = typeof req.body?.reply === 'string' ? req.body.reply.trim() : '';
+    if (!reply || reply.length > 2000) {
+      return res.status(400).json({ message: 'Phản hồi phải có từ 1 đến 2000 ký tự.' });
+    }
+    const savedReply = await billModel.saveManagerReviewReply(reviewId, req.user.id, reply);
+    res.json({ message: 'Đã lưu phản hồi đánh giá.', reply: savedReply });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function createBillReview(req, res, next) {
+  try {
+    const review = await billModel.savePaidBillReview(
+      req.params.billId,
+      req.user.id,
+      validateBillReview(req.body),
+      false
+    );
+    res.status(201).json({ message: 'Đã gửi đánh giá bill.', review });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updateBillReview(req, res, next) {
+  try {
+    const review = await billModel.savePaidBillReview(
+      req.params.billId,
+      req.user.id,
+      validateBillReview(req.body),
+      true
+    );
+    res.json({ message: 'Đã cập nhật đánh giá bill.', review });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // POST /api/bills/:billId/items — phuc_vu thêm món vào bill (đẩy realtime xuống bếp)
 async function addItem(req, res, next) {
   try {
@@ -243,4 +385,22 @@ async function payBill(req, res, next) {
   }
 }
 
-module.exports = { getByTable, listMyHistory, addItem, removeItem, kitchenQueue, readyItems, advanceItem, serveItem, listPayable, getPaymentSummary, getPaymentQr, requestPayment, payBill };
+module.exports = {
+  getByTable,
+  listMyHistory,
+  listRestaurantReviews,
+  replyToBillReview,
+  createBillReview,
+  updateBillReview,
+  addItem,
+  removeItem,
+  kitchenQueue,
+  readyItems,
+  advanceItem,
+  serveItem,
+  listPayable,
+  getPaymentSummary,
+  getPaymentQr,
+  requestPayment,
+  payBill,
+};

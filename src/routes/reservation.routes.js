@@ -12,6 +12,7 @@ router.get('/preorders/pending', authMiddleware, requireRole('thu_ngan'), ctrl.l
 router.get('/upcoming', authMiddleware, requireRole('phuc_vu'), ctrl.listUpcoming);
 router.get('/', authMiddleware, requireRole('customer'), ctrl.listMine);
 router.patch('/:id/cancel', authMiddleware, requireRole('customer'), ctrl.cancelMyReservation);
+router.patch('/:id/restore-after-cancel', authMiddleware, requireRole('phuc_vu'), ctrl.restoreStaffCancelledReservation);
 router.get('/:id/preorder', authMiddleware, requireRole('customer'), ctrl.getMyPreorder);
 router.patch('/:id/preorder/contact', authMiddleware, requireRole('thu_ngan'), ctrl.recordPreorderContact);
 router.post('/:id/preorder/prepare', authMiddleware, requireRole('thu_ngan'), ctrl.preparePreorder);
@@ -19,6 +20,7 @@ router.get('/:id', authMiddleware, requireRole('customer'), ctrl.getMineById);
 router.get('/:id/deposit-qr', authMiddleware, requireRole('customer'), ctrl.getDepositQr);
 router.patch('/:id/confirm-deposit', authMiddleware, requireRole('thu_ngan'), ctrl.confirmDeposit);
 router.patch('/:id/confirm-arrival', authMiddleware, requireRole('phuc_vu'), ctrl.confirmArrival);
+router.patch('/:id/tables', authMiddleware, requireRole('phuc_vu'), ctrl.transferTables);
 router.patch('/:id/cancel-by-staff', authMiddleware, requireRole('phuc_vu'), ctrl.cancelReservationByStaff);
 router.patch('/:id/confirm-refund', authMiddleware, requireRole('manager'), ctrl.confirmRefund);
 

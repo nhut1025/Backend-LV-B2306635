@@ -32,12 +32,48 @@ async function getHoldMinutes() {
   return parseInt(value, 10);
 }
 
+function validateReservationDateTime(reservationDate, reservationTime) {
+  const invalidDateTime = new Error('Ngày hoặc giờ đặt bàn không hợp lệ.');
+  invalidDateTime.status = 400;
+  const parsedDate = typeof reservationDate === 'string'
+    ? new Date(`${reservationDate}T00:00:00Z`)
+    : null;
+
+  if (
+    typeof reservationDate !== 'string'
+    || !/^\d{4}-\d{2}-\d{2}$/.test(reservationDate)
+    || Number.isNaN(parsedDate.getTime())
+    || parsedDate.toISOString().slice(0, 10) !== reservationDate
+    || typeof reservationTime !== 'string'
+    || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(reservationTime)
+  ) {
+    throw invalidDateTime;
+  }
+
+  if (reservationTime < '07:00' || reservationTime > '21:00') {
+    const err = new Error('Nhà hàng chỉ nhận đặt bàn trong khung giờ 07:00–21:00.');
+    err.status = 400;
+    throw err;
+  }
+}
+
 async function createHold(userId, {
   partySize, reservationDate, reservationTime, phone, tableIds, preorderItems = [],
 }) {
+  validateReservationDateTime(reservationDate, reservationTime);
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
+
+    const [dateTimeRows] = await conn.query(
+      'SELECT TIMESTAMP(?, ?) <= NOW() AS is_past',
+      [reservationDate, reservationTime]
+    );
+    if (Number(dateTimeRows[0].is_past) === 1) {
+      const err = new Error('Không thể đặt bàn vào thời gian đã qua. Vui lòng chọn ngày giờ trong tương lai.');
+      err.status = 400;
+      throw err;
+    }
 
     const [lockedTables] = await conn.query(
       `SELECT id, capacity, status FROM restaurant_tables WHERE id IN (?) FOR UPDATE`,
@@ -421,6 +457,7 @@ async function findMyReservations(userId) {
             r.created_at, r.cancelled_at, r.cancelled_by,
             GROUP_CONCAT(rt.table_id) AS table_ids,
             d.status AS deposit_status, d.amount AS deposit_amount,
+            d.refunded_at, d.forfeited_at,
             CASE WHEN d.status = 'da_coc'
                    AND TIMESTAMP(r.reservation_date, r.reservation_time) >= DATE_ADD(NOW(), INTERVAL ? MINUTE)
                  THEN 1 ELSE 0 END AS cancel_refund_eligible,
@@ -460,11 +497,17 @@ async function findUpcomingReservations() {
   if (!Number.isInteger(cancellationDeadlineMinutes) || cancellationDeadlineMinutes < 0) {
     throw new Error('Cấu hình cancellation_deadline_minutes không hợp lệ.');
   }
+  const noShowBufferMinutes = Number.parseInt(await getSetting('no_show_buffer_minutes', '15'), 10);
+  if (!Number.isInteger(noShowBufferMinutes) || noShowBufferMinutes < 0) {
+    throw new Error('Cấu hình no_show_buffer_minutes không hợp lệ.');
+  }
   const [rows] = await pool.query(
     `SELECT r.id, r.party_size, r.reservation_date, r.reservation_time, r.phone,
             u.full_name AS customer_name,
             GROUP_CONCAT(rt.table_id) AS table_ids,
             GROUP_CONCAT(t.table_number) AS table_numbers,
+            CASE WHEN DATE_ADD(TIMESTAMP(r.reservation_date, r.reservation_time), INTERVAL ? MINUTE) <= NOW()
+                 THEN 1 ELSE 0 END AS late_cancel_eligible,
             CASE WHEN d.status = 'da_coc'
                    AND TIMESTAMP(r.reservation_date, r.reservation_time) >= DATE_ADD(NOW(), INTERVAL ? MINUTE)
                  THEN 1 ELSE 0 END AS cancel_refund_eligible,
@@ -484,7 +527,31 @@ async function findUpcomingReservations() {
        )
      GROUP BY r.id
      ORDER BY r.reservation_date ASC, r.reservation_time ASC`,
-    [cancellationDeadlineMinutes]
+    [noShowBufferMinutes, cancellationDeadlineMinutes]
+  );
+  return rows;
+}
+
+async function findRecoverableStaffCancellations() {
+  const noShowBufferMinutes = Number.parseInt(await getSetting('no_show_buffer_minutes', '15'), 10);
+  if (!Number.isInteger(noShowBufferMinutes) || noShowBufferMinutes < 0) {
+    throw new Error('Cấu hình no_show_buffer_minutes không hợp lệ.');
+  }
+  const [rows] = await pool.query(
+    `SELECT r.id, r.party_size, r.reservation_date, r.reservation_time, r.phone, r.cancelled_at,
+            u.full_name AS customer_name, d.amount AS deposit_amount,
+            GROUP_CONCAT(t.table_number ORDER BY t.table_number) AS table_numbers
+     FROM reservations r
+     JOIN users u ON u.id = r.user_id
+     JOIN deposits d ON d.reservation_id = r.id AND d.status = 'mat_coc'
+     JOIN reservation_tables rt ON rt.reservation_id = r.id
+     JOIN restaurant_tables t ON t.id = rt.table_id
+     WHERE r.status = 'da_huy' AND r.cancelled_by = 'staff'
+       AND r.cancelled_at >= DATE_SUB(NOW(), INTERVAL 30 MINUTE)
+       AND DATE_ADD(TIMESTAMP(r.reservation_date, r.reservation_time), INTERVAL ? MINUTE) <= NOW()
+     GROUP BY r.id
+     ORDER BY r.cancelled_at DESC`,
+    [noShowBufferMinutes]
   );
   return rows;
 }
@@ -536,6 +603,10 @@ async function cancelReservation(reservationId, {
   if (!Number.isInteger(cancellationDeadlineMinutes) || cancellationDeadlineMinutes < 0) {
     throw new Error('Cấu hình cancellation_deadline_minutes không hợp lệ.');
   }
+  const noShowBufferMinutes = Number.parseInt(await getSetting('no_show_buffer_minutes', '15'), 10);
+  if (!Number.isInteger(noShowBufferMinutes) || noShowBufferMinutes < 0) {
+    throw new Error('Cấu hình no_show_buffer_minutes không hợp lệ.');
+  }
 
   const conn = await pool.getConnection();
   try {
@@ -548,9 +619,11 @@ async function cancelReservation(reservationId, {
     const [reservationRows] = await conn.query(
       `SELECT id, user_id, status,
               TIMESTAMP(reservation_date, reservation_time) >= DATE_ADD(NOW(), INTERVAL ? MINUTE)
-                AS refund_eligible
+                AS refund_eligible,
+              DATE_ADD(TIMESTAMP(reservation_date, reservation_time), INTERVAL ? MINUTE) <= NOW()
+                AS late_cancel_eligible
        FROM reservations WHERE id = ? FOR UPDATE`,
-      [cancellationDeadlineMinutes, reservationId]
+      [cancellationDeadlineMinutes, noShowBufferMinutes, reservationId]
     );
     if (reservationRows.length === 0) {
       const err = new Error('Không tìm thấy đặt bàn này.');
@@ -566,6 +639,12 @@ async function cancelReservation(reservationId, {
     }
     if (!['giu_tam', 'da_dat'].includes(reservation.status)) {
       const err = new Error('Chỉ có thể hủy đơn đang ở trạng thái giữ tạm hoặc đã đặt.');
+      err.status = 409;
+      throw err;
+    }
+    if (actor === 'staff' && reservation.status === 'da_dat'
+      && !Number(reservation.late_cancel_eligible)) {
+      const err = new Error('Nhân viên chỉ có thể chủ động hủy sau khi khách trễ ít nhất 15 phút.');
       err.status = 409;
       throw err;
     }
@@ -663,14 +742,131 @@ async function cancelReservation(reservationId, {
       [actor, reservationId]
     );
 
+    const [cancelledRows] = await conn.query(
+      `SELECT cancelled_at FROM reservations WHERE id = ?`,
+      [reservationId]
+    );
+
     await conn.commit();
     return {
       reservationId,
       cancelled: true,
+      cancelledBy: actor,
+      cancelledAt: cancelledRows[0].cancelled_at,
       refundEligible,
       depositStatus,
       depositAmount: Number(deposit.amount),
     };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function restoreStaffCancelledReservation(reservationId) {
+  const noShowBufferMinutes = Number.parseInt(await getSetting('no_show_buffer_minutes', '15'), 10);
+  if (!Number.isInteger(noShowBufferMinutes) || noShowBufferMinutes < 0) {
+    throw new Error('Cấu hình no_show_buffer_minutes không hợp lệ.');
+  }
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [reservationRows] = await conn.query(
+      `SELECT id, party_size, status, cancelled_by, cancelled_at,
+              cancelled_at >= DATE_SUB(NOW(), INTERVAL 30 MINUTE) AS within_restore_window,
+              DATE_ADD(TIMESTAMP(reservation_date, reservation_time), INTERVAL ? MINUTE) <= NOW()
+                AS late_enough
+       FROM reservations WHERE id = ? FOR UPDATE`,
+      [noShowBufferMinutes, reservationId]
+    );
+    if (reservationRows.length === 0 || reservationRows[0].status !== 'da_huy'
+      || reservationRows[0].cancelled_by !== 'staff'
+      || !Number(reservationRows[0].within_restore_window)
+      || !Number(reservationRows[0].late_enough)) {
+      const err = new Error('Chỉ có thể khôi phục đơn do nhân viên hủy trong vòng 30 phút sau khi hủy.');
+      err.status = 409;
+      throw err;
+    }
+
+    const [depositRows] = await conn.query(
+      `SELECT id, status FROM deposits WHERE reservation_id = ? FOR UPDATE`,
+      [reservationId]
+    );
+    if (depositRows.length === 0 || depositRows[0].status !== 'mat_coc') {
+      const err = new Error('Không thể khôi phục vì trạng thái tiền cọc đã thay đổi.');
+      err.status = 409;
+      throw err;
+    }
+
+    const [originalTableRows] = await conn.query(
+      `SELECT table_id FROM reservation_tables WHERE reservation_id = ?`,
+      [reservationId]
+    );
+    if (originalTableRows.length === 0) {
+      const err = new Error('Không thể khôi phục vì đơn không còn bàn được ghi nhận.');
+      err.status = 409;
+      throw err;
+    }
+
+    const originalTableIds = originalTableRows.map((table) => table.table_id);
+    const [availableTables] = await conn.query(
+      `SELECT id, table_number, capacity, status, current_reservation_id
+       FROM restaurant_tables
+       WHERE status = 'trong' OR id IN (?)
+       FOR UPDATE`,
+      [originalTableIds]
+    );
+    const originalTables = availableTables.filter(
+      (table) => originalTableIds.includes(table.id)
+    );
+    let restoredTables;
+    if (originalTables.length === originalTableIds.length
+      && originalTables.every((table) => table.status === 'trong' && table.current_reservation_id === null)) {
+      restoredTables = originalTables;
+    } else {
+      restoredTables = suggestTableCombo(
+        availableTables.filter((table) => table.status === 'trong' && table.current_reservation_id === null),
+        reservationRows[0].party_size
+      );
+    }
+    if (!restoredTables) {
+      const err = new Error('Không thể khôi phục vì hiện không còn bàn trống phù hợp cho số khách này.');
+      err.status = 409;
+      throw err;
+    }
+
+    const restoredTableIds = restoredTables.map((table) => table.id);
+    const sameTableAssignment = originalTableIds.length === restoredTableIds.length
+      && originalTableIds.every((tableId) => restoredTableIds.includes(tableId));
+    if (!sameTableAssignment) {
+      await conn.query(`DELETE FROM reservation_tables WHERE reservation_id = ?`, [reservationId]);
+      await conn.query(
+        `INSERT INTO reservation_tables (reservation_id, table_id) VALUES ?`,
+        [restoredTableIds.map((tableId) => [reservationId, tableId])]
+      );
+    }
+
+    await conn.query(
+      `UPDATE reservations SET status = 'da_dat', cancelled_at = NULL, cancelled_by = NULL
+       WHERE id = ? AND status = 'da_huy'`,
+      [reservationId]
+    );
+    await conn.query(
+      `UPDATE deposits SET status = 'da_coc', forfeited_at = NULL WHERE id = ?`,
+      [depositRows[0].id]
+    );
+    await conn.query(
+      `UPDATE restaurant_tables
+       SET status = 'da_dat', locked_by = NULL, locked_until = NULL, current_reservation_id = ?
+       WHERE id IN (?)`,
+      [reservationId, restoredTableIds]
+    );
+
+    await conn.commit();
+    return { tableNumbers: restoredTables.map((table) => table.table_number).join(', ') };
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -739,94 +935,6 @@ async function releaseExpiredReservation(reservationId) {
     await conn.query(
       `UPDATE deposits SET status = 'da_huy' WHERE id = ?`,
       [depositRows[0].id]
-    );
-
-    await conn.commit();
-    return true;
-  } catch (err) {
-    await conn.rollback();
-    throw err;
-  } finally {
-    conn.release();
-  }
-}
-
-async function findNoShowReservationIds() {
-  const bufferMinutes = Number.parseInt(await getSetting('no_show_buffer_minutes', '15'), 10);
-  if (!Number.isInteger(bufferMinutes) || bufferMinutes < 0) {
-    throw new Error('Cấu hình no_show_buffer_minutes không hợp lệ.');
-  }
-  const [rows] = await pool.query(
-    `SELECT r.id
-     FROM reservations r
-     WHERE r.status = 'da_dat'
-       AND DATE_ADD(TIMESTAMP(r.reservation_date, r.reservation_time), INTERVAL ? MINUTE) <= NOW()
-       AND EXISTS (
-         SELECT 1 FROM restaurant_tables t
-         WHERE t.current_reservation_id = r.id AND t.status = 'da_dat'
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM restaurant_tables arrived
-         WHERE arrived.current_reservation_id = r.id AND arrived.status = 'co_khach'
-       )
-     ORDER BY r.id ASC`,
-    [bufferMinutes]
-  );
-  return rows.map((row) => row.id);
-}
-
-async function markReservationNoShow(reservationId) {
-  const bufferMinutes = Number.parseInt(await getSetting('no_show_buffer_minutes', '15'), 10);
-  if (!Number.isInteger(bufferMinutes) || bufferMinutes < 0) {
-    throw new Error('Cấu hình no_show_buffer_minutes không hợp lệ.');
-  }
-
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    const [depositRows] = await conn.query(
-      `SELECT id, status FROM deposits WHERE reservation_id = ? FOR UPDATE`,
-      [reservationId]
-    );
-    const [reservationRows] = await conn.query(
-      `SELECT id, status,
-              DATE_ADD(TIMESTAMP(reservation_date, reservation_time), INTERVAL ? MINUTE) <= NOW()
-                AS no_show_due
-       FROM reservations WHERE id = ? FOR UPDATE`,
-      [bufferMinutes, reservationId]
-    );
-    if (reservationRows.length === 0 || reservationRows[0].status !== 'da_dat'
-      || !Number(reservationRows[0].no_show_due)) {
-      await conn.rollback();
-      return false;
-    }
-
-    const [tableRows] = await conn.query(
-      `SELECT id, status FROM restaurant_tables WHERE current_reservation_id = ? FOR UPDATE`,
-      [reservationId]
-    );
-    if (!tableRows.some((table) => table.status === 'da_dat')
-      || tableRows.some((table) => table.status === 'co_khach')) {
-      await conn.rollback();
-      return false;
-    }
-
-    if (depositRows.length > 0 && depositRows[0].status === 'da_coc') {
-      await conn.query(
-        `UPDATE deposits SET status = 'mat_coc', forfeited_at = NOW() WHERE id = ?`,
-        [depositRows[0].id]
-      );
-    }
-    await conn.query(
-      `UPDATE reservations SET status = 'qua_han' WHERE id = ? AND status = 'da_dat'`,
-      [reservationId]
-    );
-    await conn.query(
-      `UPDATE restaurant_tables
-       SET status = 'trong', locked_by = NULL, locked_until = NULL, current_reservation_id = NULL
-       WHERE current_reservation_id = ?`,
-      [reservationId]
     );
 
     await conn.commit();
@@ -990,14 +1098,14 @@ module.exports = {
   findMyReservationById,
   findExpiredHeldReservationIds,
   releaseExpiredReservation,
-  findNoShowReservationIds,
-  markReservationNoShow,
   findDepositByReservationId,
   findPendingDeposits,
   findPendingRefunds,
   confirmRefund,
   confirmDeposit,
   findUpcomingReservations,
+  findRecoverableStaffCancellations,
   confirmArrival,
+  restoreStaffCancelledReservation,
   cancelReservation,
 };

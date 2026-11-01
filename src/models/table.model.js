@@ -7,6 +7,17 @@ async function findAll() {
   return rows;
 }
 
+async function findAllOperational() {
+  const [rows] = await pool.query(
+    `SELECT t.id, t.table_number, t.capacity, t.status, t.current_reservation_id,
+            r.party_size AS current_reservation_party_size
+     FROM restaurant_tables t
+     LEFT JOIN reservations r ON r.id = t.current_reservation_id
+     ORDER BY t.table_number`
+  );
+  return rows;
+}
+
 async function findById(id) {
   const [rows] = await pool.query('SELECT * FROM restaurant_tables WHERE id = ?', [id]);
   return rows;
@@ -104,4 +115,14 @@ async function releaseTable(id) {
   }
 }
 
-module.exports = { findAll, findById, create, update, findStatusById, remove, assignWalkIn, releaseTable };
+module.exports = {
+  findAll,
+  findAllOperational,
+  findById,
+  create,
+  update,
+  findStatusById,
+  remove,
+  assignWalkIn,
+  releaseTable,
+};
