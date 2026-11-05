@@ -50,6 +50,37 @@ type to the existing `dishes.id` type, including its signed/unsigned setting.
   - Ingredient management already supports public `GET /api/ingredients` and
   manager-only create, rename, and delete endpoints under `/api/ingredients`.
 
+### Chat with the restaurant
+
+On an existing database, run `database/v16_chat_migration.sql` once. It adds
+conversation close metadata, message attachment metadata, and lookup indexes
+without replacing the existing chat tables. New installations include these
+columns in `database/full_setup_database.sql`.
+
+Only authenticated customers and cashiers can use `/api/chat`. Customers can
+list their own conversations and send/read messages; cashiers share the open
+inbox, claim a conversation by replying, take over an open conversation, and
+close conversations assigned to them. Message text is limited to 1,500
+characters. A single image, PDF, Word, Excel, CSV, or TXT attachment up to
+20 MB can be sent with a message. Chat files are stored under the private
+`storage/chat` directory and downloaded only through the authenticated
+`GET /api/chat/messages/:messageId/attachment` endpoint.
+
+- `GET /api/chat/conversations` and `GET /api/chat/unread-count` list inboxes
+  and unread counts according to the caller's role.
+- `GET /api/chat/conversations/:id/messages` loads history and marks incoming
+  messages as read.
+- `POST /api/chat/messages` accepts multipart fields `content`,
+  `conversation_id` (required for cashiers; optional for customers), and
+  `attachment`.
+- Cashiers can take over with `PATCH /api/chat/conversations/:id/takeover`
+  and close their assigned conversation with
+  `PATCH /api/chat/conversations/:id/close`.
+
+The frontend provides `/chat` for customers and cashiers. Realtime events use
+the `chat:conversation-new`, `chat:message-new`, `chat:assigned`, `chat:closed`,
+`chat:read`, and `chat:cashier-presence` names.
+
 Authentication endpoints are mounted under `/api/auth`:
 
 - `POST /forgot-password` with `{ "email": "..." }`
@@ -80,6 +111,19 @@ Manager staff endpoints:
 For real email delivery, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
 `SMTP_PASS`, and `MAIL_FROM` in `.env`. Without SMTP settings, links are
 printed to the server console for local development.
+
+## Reservation Timing Settings
+
+Managers can configure reservation timings at `/reservation-timing`. Values
+are saved in the existing `settings` table, so existing databases need no
+schema migration. The page controls booking hours, the payment hold, the
+customer refund deadline, the staff no-show threshold, the staff restore
+window, the table-transfer conflict duration, and the expired-hold scan
+interval. Updating the scan interval reschedules the running job without a
+server restart. Public booking forms and staff screens read the same values
+from `GET /api/settings/reservation-rules`.
+The full configuration is available to managers through
+`GET/PUT /api/settings/reservation-timing`.
 
 ## Reservation Preorders
 

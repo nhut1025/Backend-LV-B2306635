@@ -336,7 +336,7 @@ async function savePaidBillReview(
   }
 }
 
-async function findRestaurantReviews({ rating, limit, offset }) {
+async function findRestaurantReviews({ rating, replyStatus = 'all', limit, offset }) {
   const [summaryRows] = await pool.query(
     `SELECT COUNT(*) AS review_count,
             COALESCE(AVG(br.rating), 0) AS average_rating,
@@ -356,8 +356,11 @@ async function findRestaurantReviews({ rating, limit, offset }) {
      FROM bill_reviews br
      JOIN bills b ON b.id = br.bill_id AND b.status = 'da_thanh_toan'
      JOIN reservations r ON r.id = b.reservation_id AND r.user_id = br.user_id
-     WHERE (? IS NULL OR br.rating = ? OR (? = 2 AND br.rating <= 2))`,
-    [rating, rating, rating]
+     WHERE (? IS NULL OR br.rating = ? OR (? = 2 AND br.rating <= 2))
+       AND (? = 'all'
+         OR (? = 'replied' AND br.manager_reply IS NOT NULL AND TRIM(br.manager_reply) <> '')
+         OR (? = 'unreplied' AND (br.manager_reply IS NULL OR TRIM(br.manager_reply) = '')))`,
+    [rating, rating, rating, replyStatus, replyStatus, replyStatus]
   );
   const [rows] = await pool.query(
     `    SELECT br.id, br.rating, br.food_rating, br.service_rating, br.ambience_rating,
@@ -368,9 +371,12 @@ async function findRestaurantReviews({ rating, limit, offset }) {
     JOIN reservations r ON r.id = b.reservation_id AND r.user_id = br.user_id
     LEFT JOIN users manager ON manager.id = br.replied_by
      WHERE (? IS NULL OR br.rating = ? OR (? = 2 AND br.rating <= 2))
+       AND (? = 'all'
+         OR (? = 'replied' AND br.manager_reply IS NOT NULL AND TRIM(br.manager_reply) <> '')
+         OR (? = 'unreplied' AND (br.manager_reply IS NULL OR TRIM(br.manager_reply) = '')))
      ORDER BY br.created_at DESC, br.id DESC
      LIMIT ? OFFSET ?`,
-    [rating, rating, rating, limit, offset]
+    [rating, rating, rating, replyStatus, replyStatus, replyStatus, limit, offset]
   );
   return {
     summary: {

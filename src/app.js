@@ -14,6 +14,7 @@ const settingsRoutes = require('./routes/settings.routes');
 const billRoutes = require('./routes/bill.routes');
 const { notFoundHandler, errorHandler } = require('./middlewares/error.middleware');
 const financeRoutes = require('./routes/finance.routes');
+const chatRoutes = require('./routes/chat.routes');
 
 const app = express();
 
@@ -33,6 +34,7 @@ app.use('/api/reservations', reservationRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/bills', billRoutes);
 app.use('/api/finance', financeRoutes);
+app.use('/api/chat', chatRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

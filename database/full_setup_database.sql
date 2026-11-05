@@ -447,8 +447,13 @@ CREATE TABLE IF NOT EXISTS conversations (
   staff_id INT UNSIGNED NULL,
   status ENUM('open','closed') NOT NULL DEFAULT 'open',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  closed_at DATETIME NULL,
+  closed_by INT UNSIGNED NULL,
   FOREIGN KEY (customer_id) REFERENCES users(id),
-  FOREIGN KEY (staff_id) REFERENCES users(id)
+  FOREIGN KEY (staff_id) REFERENCES users(id),
+  FOREIGN KEY (closed_by) REFERENCES users(id) ON DELETE SET NULL,
+  INDEX idx_conversations_customer_status (customer_id, status),
+  INDEX idx_conversations_staff_status (staff_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============ 15. MESSAGES ============
@@ -459,8 +464,13 @@ CREATE TABLE IF NOT EXISTS messages (
   content TEXT NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  attachment_filename VARCHAR(255) NULL,
+  attachment_mime VARCHAR(100) NULL,
+  attachment_size BIGINT UNSIGNED NULL,
+  attachment_path VARCHAR(500) NULL,
   FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
-  FOREIGN KEY (sender_id) REFERENCES users(id)
+  FOREIGN KEY (sender_id) REFERENCES users(id),
+  INDEX idx_messages_conversation_created (conversation_id, created_at, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============ 16. DISH_RECOMMENDATIONS ============
@@ -551,8 +561,12 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 INSERT IGNORE INTO settings (setting_key, setting_value) VALUES
   ('cancellation_deadline_minutes', '45'),
   ('no_show_buffer_minutes', '15'),
-  ('reservation_hold_minutes', '3'),
+  ('reservation_hold_minutes', '15'),
+  ('reservation_restore_minutes', '30'),
   ('table_transfer_duration_minutes', '120'),
+  ('reservation_hold_scan_seconds', '30'),
+  ('reservation_open_time', '07:00'),
+  ('reservation_close_time', '21:00'),
   ('table_capacity_min', '1'),
   ('table_capacity_max', '16'),
   ('deposit_amount', '50000'),
@@ -565,4 +579,3 @@ SELECT * FROM settings;
 SHOW TABLES;
 
 USE quan_an_db;
-UPDATE settings SET setting_value = '15' WHERE setting_key = 'reservation_hold_minutes';

@@ -34,9 +34,27 @@ function initSocket(httpServer) {
   });
 
   io.on('connection', (socket) => {
-    const { role } = socket.data.user;
+    const { role, id } = socket.data.user;
     if (role === 'kitchen' || role === 'phuc_vu' || role === 'thu_ngan' || role === 'manager') {
       socket.join(role);
+    }
+    if (role === 'customer') {
+      socket.join('customer');
+      socket.join(`user:${id}`);
+      io.in('thu_ngan').fetchSockets()
+        .then((cashiers) => socket.emit('chat:cashier-presence', { online: cashiers.length > 0 }))
+        .catch((error) => console.error('Không thể kiểm tra trạng thái thu ngân:', error));
+    }
+    if (role === 'thu_ngan') {
+      socket.join(`user:${id}`);
+      io.in('thu_ngan').fetchSockets()
+        .then((cashiers) => io.to('customer').emit('chat:cashier-presence', { online: cashiers.length > 0 }))
+        .catch((error) => console.error('Không thể cập nhật trạng thái thu ngân:', error));
+      socket.on('disconnect', () => {
+        io.in('thu_ngan').fetchSockets()
+          .then((cashiers) => io.to('customer').emit('chat:cashier-presence', { online: cashiers.length > 0 }))
+          .catch((error) => console.error('Không thể cập nhật trạng thái thu ngân:', error));
+      });
     }
   });
 

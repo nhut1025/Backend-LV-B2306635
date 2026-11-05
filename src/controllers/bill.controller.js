@@ -85,6 +85,14 @@ function validateBillReview(body) {
 async function listRestaurantReviews(req, res, next) {
   try {
     const rawRating = req.query.rating;
+    const rawReplyStatus = req.query.reply_status;
+    let replyStatus = 'all';
+    if (rawReplyStatus !== undefined) {
+      if (!['all', 'replied', 'unreplied'].includes(String(rawReplyStatus))) {
+        return res.status(400).json({ message: 'Bộ lọc trạng thái phản hồi không hợp lệ.' });
+      }
+      replyStatus = String(rawReplyStatus);
+    }
     let rating = null;
     if (rawRating !== undefined && rawRating !== 'all') {
       if (!['2', '3', '4', '5'].includes(String(rawRating))) {
@@ -107,6 +115,7 @@ async function listRestaurantReviews(req, res, next) {
     }
     const result = await billModel.findRestaurantReviews({
       rating,
+      replyStatus,
       limit: perPage,
       offset,
     });
