@@ -101,6 +101,155 @@ at the counter. Cashiers confirm receipt with
 bill closed and the table released. Cashiers can see pending methods in
 `GET /api/bills/payable`.
 
+### Chạy script tạo bill mô phỏng
+
+Làm lần lượt theo hướng dẫn này. Có hai cửa sổ Terminal: **Terminal 1 chạy
+backend**; **Terminal 2 chạy script**. Không dán file JavaScript vào MySQL
+Workbench. Workbench chỉ dùng để kiểm tra dữ liệu sau khi script chạy.
+
+#### Bước 1: Chọn database
+
+Mở file `.env` ở thư mục Backend. Dòng `DB_NAME` quyết định backend và script
+ghi dữ liệu vào database nào. Ví dụ, nếu muốn dùng `quan_an_db`:
+
+```env
+DB_NAME=quan_an_db
+```
+
+Lưu file. Script vẫn chạy được với database tên `quan_an_db`, nhưng do tên này
+không chứa `test`, `dev`, `sim` hoặc `local`, lệnh chạy bên dưới cần có cờ
+`--allow-non-test-db`. Cờ này chỉ bỏ chốt kiểm tra tên; database đích vẫn do
+`DB_NAME` trong `.env` quyết định.
+
+Trong MySQL Workbench, chọn đúng schema rồi kiểm tra dữ liệu nền:
+
+```sql
+USE quan_an_db;
+
+SELECT id, table_number, capacity, status
+FROM restaurant_tables;
+
+SELECT id, name, price, category, is_available
+FROM dishes
+WHERE is_available = 1;
+
+SELECT id, email, role, is_active, is_verified
+FROM users
+WHERE role IN ('phuc_vu', 'kitchen', 'thu_ngan');
+```
+
+Cần có bàn `trong`, ít nhất hai món đang phục vụ và ba tài khoản nhân viên
+đăng nhập được với các vai trò `phuc_vu`, `kitchen`, `thu_ngan`.
+
+#### Bước 2: Chạy backend ở Terminal 1
+
+Mở Terminal trong VS Code, chạy:
+
+```powershell
+Set-Location 'D:\Luận văn\Code\Backend'
+npm run dev
+```
+
+Nếu backend đã chạy trước khi đổi `.env`, nhấn `Ctrl+C` để dừng rồi chạy lại.
+Để cửa sổ này mở; cần thấy thông báo kết nối MySQL thành công và server đang
+chạy tại `http://localhost:3000`.
+
+#### Bước 3: Nhập tài khoản nhân viên ở Terminal 2
+
+Mở Terminal thứ hai trong VS Code và chạy các lệnh sau, thay email/mật khẩu
+mẫu bằng tài khoản nhân viên có trong chính database đã chọn:
+
+```powershell
+Set-Location 'D:\Luận văn\Code\Backend'
+
+$env:SIM_SERVICE_EMAIL = 'email-nhan-vien-phuc-vu'
+$env:SIM_SERVICE_PASSWORD = 'mat-khau-phuc-vu'
+$env:SIM_KITCHEN_EMAIL = 'email-nhan-vien-bep'
+$env:SIM_KITCHEN_PASSWORD = 'mat-khau-nhan-vien-bep'
+$env:SIM_CASHIER_EMAIL = 'email-thu-ngan'
+$env:SIM_CASHIER_PASSWORD = 'mat-khau-thu-ngan'
+```
+
+Các biến này chỉ dùng trong Terminal 2 hiện tại. Chạy script ngay trong cửa sổ
+này. Không gửi mật khẩu vào README, chat hoặc mã nguồn.
+
+#### Bước 4: Chạy thử một khách, một lượt
+
+Trong Terminal 2, chạy:
+
+```powershell
+node .\scripts\simulate-customer-bills.js --customers=1 --visits=1 --seed=123 --execute --allow-non-test-db
+```
+
+Script tạo khách `sim-customer-0001@example.test`, rồi chạy quy trình đặt bàn,
+xác nhận cọc, xác nhận khách đến, gọi món, bếp chế biến, phục vụ và thu ngân
+xác nhận thanh toán. Nó in bill, số khách, từng món và số lượng ra Terminal.
+Thanh toán online (nếu được chọn) chỉ là mô phỏng xác nhận qua API, không
+chuyển tiền thật.
+
+Ngày trên đặt bàn ban đầu cần là tương lai để API chấp nhận quy trình. Sau khi
+một lượt hoàn tất, script cập nhật các mốc ngày của lượt đó thành lịch sử mô
+phỏng trong quá khứ. Mặc định các lượt trải trong 180 ngày gần nhất; ví dụ
+`--history-days=90` để dùng khoảng 90 ngày. Các bill cũ không bị script sửa.
+
+#### Bước 5: Kiểm tra bill trong Workbench
+
+Chọn schema `quan_an_db` trong Workbench và chạy:
+
+```sql
+SELECT
+    b.id AS bill_id,
+    u.email AS customer_email,
+    b.status AS bill_status,
+    b.total_amount,
+    b.payment_method,
+    b.paid_at
+FROM bills b
+JOIN reservations r ON r.id = b.reservation_id
+JOIN users u ON u.id = r.user_id
+WHERE u.email LIKE 'sim-customer-%@example.test'
+ORDER BY b.id DESC;
+```
+
+Bill hoàn tất cần có `bill_status = da_thanh_toan`. Xem các món của bill:
+
+```sql
+SELECT
+    b.id AS bill_id,
+    u.email,
+    d.name AS dish_name,
+    bi.quantity,
+    bi.unit_price
+FROM bills b
+JOIN reservations r ON r.id = b.reservation_id
+JOIN users u ON u.id = r.user_id
+JOIN bill_items bi ON bi.bill_id = b.id
+JOIN dishes d ON d.id = bi.dish_id
+WHERE u.email LIKE 'sim-customer-%@example.test'
+  AND b.status = 'da_thanh_toan'
+  AND bi.deleted_at IS NULL
+ORDER BY b.id DESC, bi.id;
+```
+
+#### Bước 6: Tạo nhiều bill
+
+Sau khi lượt thử đúng, chạy ví dụ 30 khách, mỗi khách 4 lượt (tổng cộng 120
+lượt) trong Terminal 2:
+
+```powershell
+node .\scripts\simulate-customer-bills.js --customers=30 --visits=4 --seed=20261107 --history-days=90 --execute --allow-non-test-db
+```
+
+Nếu script dừng giữa chừng, đừng chạy lại cả lệnh ngay: lượt lỗi có thể đã giữ
+bàn hoặc tạo bill mở. Kiểm tra reservation cuối cùng trong Workbench và xử lý
+nó trước. Nếu 5 lượt đầu đã hoàn tất, có thể chạy tiếp từ lượt thứ 6 bằng cách
+giữ nguyên các tham số và thêm `--start-visit=5`.
+
+Mỗi lượt có cùng khách qua nhiều lần ghé; cách chọn món có tính đến số khách
+và danh mục món. Các giao dịch này là dữ liệu tổng hợp phục vụ thử nghiệm mô
+hình gợi ý, không phải lịch sử khách thật. Khi huấn luyện, chỉ lấy bill
+`da_thanh_toan` và món chưa bị xóa (`deleted_at IS NULL`).
+
 Manager staff endpoints:
 
 - `GET /api/users/staff`
@@ -146,6 +295,10 @@ Customers may include `preorder_items` when creating a reservation with
   ]
 }
 ```
+
+For a reservation with preorder items, the deposit is 50% of the preorder
+total, with a minimum deposit of 50,000 VND. Reservations without preorder
+items continue using the `deposit_amount` setting.
 
 Preorders are stored separately from bills and the kitchen queue until the
 cashier confirms that the customer agreed and the food should be prepared:

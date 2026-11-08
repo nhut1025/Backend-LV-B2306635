@@ -1,6 +1,8 @@
 const { pool } = require('../config/db');
 const { getSetting, getReservationTiming } = require('../utils/settings');
 
+const MINIMUM_PREORDER_DEPOSIT = 50000;
+
 // Lấy toàn bộ bàn đang trống, sắp xếp tăng dần theo capacity
 async function findFreeTables() {
   const [rows] = await pool.query(
@@ -133,7 +135,7 @@ async function createHold(userId, {
         (total, item) => total + Number(dishById.get(item.dishId).price) * item.quantity,
         0
       );
-      depositAmount = Math.round(preorderTotal / 2);
+      depositAmount = Math.max(MINIMUM_PREORDER_DEPOSIT, Math.round(preorderTotal / 2));
       const itemValues = preorderItems.map((item) => [
         reservationId,
         item.dishId,
