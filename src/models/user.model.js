@@ -51,6 +51,16 @@ async function findExcludedIngredients(id) {
   );
 }
 
+async function findPreferredIngredients(id) {
+  return pool.query(
+    `SELECT i.id, i.name FROM ingredients i
+     JOIN user_preferred_ingredients upi ON upi.ingredient_id = i.id
+     WHERE upi.user_id = ?
+     ORDER BY i.name`,
+    [id]
+  );
+}
+
 async function findExcludedIngredientIds(id) {
   const [rows] = await pool.query(
     'SELECT ingredient_id FROM user_excluded_ingredients WHERE user_id = ?',
@@ -60,11 +70,36 @@ async function findExcludedIngredientIds(id) {
 }
 
 async function replaceExcludedIngredients(connection, userId, ingredientIds) {
+  await connection.query('SELECT id FROM users WHERE id = ? FOR UPDATE', [userId]);
+  if (ingredientIds.length > 0) {
+    await connection.query(
+      'DELETE FROM user_preferred_ingredients WHERE user_id = ? AND ingredient_id IN (?)',
+      [userId, ingredientIds]
+    );
+  }
   await connection.query('DELETE FROM user_excluded_ingredients WHERE user_id = ?', [userId]);
   if (ingredientIds.length > 0) {
     const values = ingredientIds.map((ingredientId) => [userId, ingredientId]);
     await connection.query(
       'INSERT INTO user_excluded_ingredients (user_id, ingredient_id) VALUES ?',
+      [values]
+    );
+  }
+}
+
+async function replacePreferredIngredients(connection, userId, ingredientIds) {
+  await connection.query('SELECT id FROM users WHERE id = ? FOR UPDATE', [userId]);
+  if (ingredientIds.length > 0) {
+    await connection.query(
+      'DELETE FROM user_excluded_ingredients WHERE user_id = ? AND ingredient_id IN (?)',
+      [userId, ingredientIds]
+    );
+  }
+  await connection.query('DELETE FROM user_preferred_ingredients WHERE user_id = ?', [userId]);
+  if (ingredientIds.length > 0) {
+    const values = ingredientIds.map((ingredientId) => [userId, ingredientId]);
+    await connection.query(
+      'INSERT INTO user_preferred_ingredients (user_id, ingredient_id) VALUES ?',
       [values]
     );
   }
@@ -80,4 +115,6 @@ module.exports = {
   findExcludedIngredients,
   findExcludedIngredientIds,
   replaceExcludedIngredients,
+  findPreferredIngredients,
+  replacePreferredIngredients,
 };

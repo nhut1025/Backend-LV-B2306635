@@ -91,6 +91,52 @@ function summarize(bills) {
   );
 }
 
+async function listTopSellingDishes(period = 'all') {
+  const periodConditions = {
+    day: "b.paid_at >= CURDATE() AND b.paid_at < DATE_ADD(CURDATE(), INTERVAL 1 DAY)",
+    week: `b.paid_at >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
+           AND b.paid_at < DATE_ADD(
+             DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY),
+             INTERVAL 7 DAY
+           )`,
+    month: `b.paid_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+            AND b.paid_at < DATE_ADD(LAST_DAY(CURDATE()), INTERVAL 1 DAY)`,
+    three_months: `b.paid_at >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
+                   AND b.paid_at < DATE_ADD(CURDATE(), INTERVAL 1 DAY)`,
+    all: '',
+  };
+  const periodCondition = periodConditions[period];
+  if (periodCondition === undefined) {
+    throw new TypeError('Khoảng thời gian xếp hạng không hợp lệ.');
+  }
+
+  const [rows] = await pool.query(
+    `SELECT d.id AS dish_id, d.name AS dish_name,
+            COALESCE(c.name, d.category, 'Chưa phân loại') AS category,
+            d.image_url, SUM(bi.quantity) AS quantity_sold
+     FROM bills b
+     JOIN bill_items bi ON bi.bill_id = b.id AND bi.deleted_at IS NULL
+     JOIN dishes d ON d.id = bi.dish_id
+     LEFT JOIN dish_categories c ON c.id = d.category_id
+     WHERE b.status = 'da_thanh_toan'
+       AND b.payment_method IS NOT NULL
+       ${periodCondition ? `AND ${periodCondition}` : ''}
+     GROUP BY d.id, d.name, c.name, d.category, d.image_url
+     ORDER BY quantity_sold DESC, d.name ASC, d.id ASC`,
+  );
+  const dishes = rows.map((row) => ({
+    ...row,
+    quantity_sold: Number(row.quantity_sold),
+  }));
+  return {
+    dishes,
+    totals: {
+      quantity_sold: dishes.reduce((sum, dish) => sum + dish.quantity_sold, 0),
+      dish_count: dishes.length,
+    },
+  };
+}
+
 async function listDepositTransactions({ from, to }) {
   const conditions = [];
   const params = [];
@@ -202,4 +248,10 @@ async function findBillDetail(billId) {
   };
 }
 
-module.exports = { listBills, summarize, listDepositTransactions, findBillDetail };
+module.exports = {
+  listBills,
+  summarize,
+  listTopSellingDishes,
+  listDepositTransactions,
+  findBillDetail,
+};

@@ -133,7 +133,7 @@ async function findBillWithItems(billId) {
 
   const [items] = await pool.query(
     `SELECT bi.id, bi.dish_id, d.name AS dish_name, bi.quantity, bi.unit_price,
-            bi.status, bi.note, bi.created_at
+            bi.status, bi.note, bi.accepted_by_name, bi.created_at
      FROM bill_items bi
      JOIN dishes d ON d.id = bi.dish_id
      WHERE bi.bill_id = ? AND bi.deleted_at IS NULL
@@ -175,7 +175,8 @@ async function findMyPaidBillHistory(userId) {
   const billIds = bills.map((bill) => bill.id);
   const [items] = await pool.query(
     `SELECT bi.id, bi.bill_id, bi.dish_id, d.name AS dish_name,
-            bi.quantity, bi.unit_price, bi.note, bi.status, bri.sentiment AS review_sentiment
+            bi.quantity, bi.unit_price, bi.note, bi.status, bi.accepted_by_name,
+            bri.sentiment AS review_sentiment
      FROM bill_items bi
      JOIN dishes d ON d.id = bi.dish_id
      LEFT JOIN bill_reviews br ON br.bill_id = bi.bill_id
@@ -534,7 +535,7 @@ const KITCHEN_NEXT_STATUS = {
 async function findKitchenQueue() {
   const [rows] = await pool.query(
     `SELECT bi.id, bi.bill_id, bi.dish_id, d.name AS dish_name, bi.quantity,
-            bi.status, bi.note, bi.created_at, t.table_number
+            bi.status, bi.note, bi.accepted_by_name, bi.created_at, t.table_number
      FROM bill_items bi
      JOIN dishes d ON d.id = bi.dish_id
      JOIN bills b ON b.id = bi.bill_id
@@ -549,7 +550,7 @@ async function findKitchenQueue() {
 async function findReadyItems() {
   const [rows] = await pool.query(
     `SELECT bi.id, bi.bill_id, bi.dish_id, d.name AS dish_name, bi.quantity,
-            bi.status, bi.note, bi.created_at, t.table_number
+            bi.status, bi.note, bi.accepted_by_name, bi.created_at, t.table_number
      FROM bill_items bi
      JOIN dishes d ON d.id = bi.dish_id
      JOIN bills b ON b.id = bi.bill_id
@@ -562,18 +563,24 @@ async function findReadyItems() {
 
 // Bếp bấm "chuyển bước tiếp theo" — tự tính bước kế tiếp dựa trên trạng thái hiện tại,
 // dùng FOR UPDATE để tránh 2 người bếp cùng bấm 1 món trùng lúc (race condition).
-async function advanceItemStatus(itemId) {
+async function advanceItemStatus(itemId, userId, expectedStatus) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
 
     const [rows] = await conn.query(
-      `SELECT status FROM bill_items WHERE id = ? AND deleted_at IS NULL FOR UPDATE`,
+      `SELECT status, accepted_by, accepted_by_name
+       FROM bill_items WHERE id = ? AND deleted_at IS NULL FOR UPDATE`,
       [itemId]
     );
     if (rows.length === 0) {
       const err = new Error('Không tìm thấy món.');
       err.status = 404;
+      throw err;
+    }
+    if (expectedStatus && rows[0].status !== expectedStatus) {
+      const err = new Error('Món đã được nhân viên khác cập nhật. Vui lòng làm mới hàng đợi.');
+      err.status = 409;
       throw err;
     }
 
@@ -584,7 +591,25 @@ async function advanceItemStatus(itemId) {
       throw err;
     }
 
-    await conn.query(`UPDATE bill_items SET status = ? WHERE id = ?`, [nextStatus, itemId]);
+    if (rows[0].status === 'cho_xac_nhan' && !rows[0].accepted_by_name) {
+      const [users] = await conn.query(
+        `SELECT full_name FROM users WHERE id = ? AND is_active = TRUE`,
+        [userId]
+      );
+      if (users.length === 0) {
+        const err = new Error('Không tìm thấy nhân viên bếp đang đăng nhập.');
+        err.status = 401;
+        throw err;
+      }
+      await conn.query(
+        `UPDATE bill_items
+         SET status = ?, accepted_by = ?, accepted_by_name = ?
+         WHERE id = ?`,
+        [nextStatus, userId, users[0].full_name, itemId]
+      );
+    } else {
+      await conn.query(`UPDATE bill_items SET status = ? WHERE id = ?`, [nextStatus, itemId]);
+    }
     await conn.commit();
     return nextStatus;
   } catch (err) {
@@ -630,7 +655,7 @@ async function markItemServed(itemId) {
 async function findQueueItemById(itemId) {
   const [rows] = await pool.query(
     `SELECT bi.id, bi.bill_id, bi.dish_id, d.name AS dish_name, bi.quantity,
-            bi.status, bi.note, bi.created_at, t.table_number
+            bi.status, bi.note, bi.accepted_by_name, bi.created_at, t.table_number
      FROM bill_items bi
      JOIN dishes d ON d.id = bi.dish_id
      JOIN bills b ON b.id = bi.bill_id
@@ -657,7 +682,8 @@ async function computeSummary(db, billId) {
   const bill = billRows[0];
 
   const [items] = await db.query(
-    `SELECT bi.id, bi.dish_id, d.name AS dish_name, bi.quantity, bi.unit_price, bi.status, bi.note
+    `SELECT bi.id, bi.dish_id, d.name AS dish_name, bi.quantity, bi.unit_price,
+            bi.status, bi.note, bi.accepted_by_name
      FROM bill_items bi
      JOIN dishes d ON d.id = bi.dish_id
      WHERE bi.bill_id = ? AND bi.deleted_at IS NULL

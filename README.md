@@ -44,6 +44,13 @@ type to the existing `dishes.id` type, including its signed/unsigned setting.
   continues setting the first URL as the legacy `image_url`. Dish detail
   returns an ordered `images` array; image upload remains manager-only at
   `POST /api/dishes/upload-image`.
+- On an existing database, run `database/v18_dish_ingredient_quantities_migration.sql`
+  once to add optional gram quantities to dish ingredients. Quantities are per
+  serving; leave them empty for seasonings. New databases include the column in
+  `database/full_setup_database.sql`.
+- Dish create/update accepts `ingredients: [{ "ingredient_id": 1, "quantity_g": 150 }]`;
+  use `null` for an ingredient without a measured amount. Legacy
+  `ingredient_ids` requests remain supported.
   - On an existing database, run `database/v11_phase8_refunds_migration.sql`
     once to add refund attribution, forfeiture timestamps, and the cancelled
     deposit status used by reservation cancellations.
@@ -56,6 +63,14 @@ On an existing database, run `database/v16_chat_migration.sql` once. It adds
 conversation close metadata, message attachment metadata, and lookup indexes
 without replacing the existing chat tables. New installations include these
 columns in `database/full_setup_database.sql`.
+
+### Kitchen item attribution
+
+On an existing database, run `database/v17_kitchen_item_attribution_migration.sql`
+once. New installations include these columns in
+`database/full_setup_database.sql`. When a kitchen employee accepts an item,
+the bill item records their user ID and a name snapshot. The name is shown in
+the kitchen queue, ready-item list, active bill, and paid bill history.
 
 Only authenticated customers and cashiers can use `/api/chat`. Customers can
 list their own conversations and send/read messages; cashiers share the open
@@ -119,7 +134,9 @@ DB_NAME=quan_an_db
 Lưu file. Script vẫn chạy được với database tên `quan_an_db`, nhưng do tên này
 không chứa `test`, `dev`, `sim` hoặc `local`, lệnh chạy bên dưới cần có cờ
 `--allow-non-test-db`. Cờ này chỉ bỏ chốt kiểm tra tên; database đích vẫn do
-`DB_NAME` trong `.env` quyết định.
+`DB_NAME` trong `.env` quyết định. Chỉ mô phỏng trên database thử nghiệm riêng
+hoặc bản sao có thể khôi phục; cờ này không làm database an toàn hơn và script
+sẽ ghi reservation, bill, tài khoản khách cùng dữ liệu liên quan vào đó.
 
 Trong MySQL Workbench, chọn đúng schema rồi kiểm tra dữ liệu nền:
 
@@ -178,10 +195,10 @@ này. Không gửi mật khẩu vào README, chat hoặc mã nguồn.
 Trong Terminal 2, chạy:
 
 ```powershell
-node .\scripts\simulate-customer-bills.js --customers=1 --visits=1 --seed=123 --execute --allow-non-test-db
+node .\scripts\simulate-customer-bills.js --customers=1 --visits=1 --customer-offset=900 --seed=123 --execute --allow-non-test-db
 ```
 
-Script tạo khách `sim-customer-0001@example.test`, rồi chạy quy trình đặt bàn,
+Script tạo khách `sim-customer-0901@example.test`, rồi chạy quy trình đặt bàn,
 xác nhận cọc, xác nhận khách đến, gọi món, bếp chế biến, phục vụ và thu ngân
 xác nhận thanh toán. Nó in bill, số khách, từng món và số lượng ra Terminal.
 Thanh toán online (nếu được chọn) chỉ là mô phỏng xác nhận qua API, không
@@ -194,7 +211,7 @@ phỏng trong quá khứ. Mặc định các lượt trải trong 180 ngày gầ
 
 #### Bước 5: Kiểm tra bill trong Workbench
 
-Chọn schema `quan_an_db` trong Workbench và chạy:
+Chọn schema được cấu hình bởi `DB_NAME` trong `.env` (ví dụ `db_test`) trong Workbench và chạy:
 
 ```sql
 SELECT
@@ -231,24 +248,157 @@ WHERE u.email LIKE 'sim-customer-%@example.test'
 ORDER BY b.id DESC, bi.id;
 ```
 
-#### Bước 6: Tạo nhiều bill
+#### Bước 6: Tạo nhiều bill có sở thích ổn định
 
-Sau khi lượt thử đúng, chạy ví dụ 30 khách, mỗi khách 4 lượt (tổng cộng 120
+Sau khi lượt thử đúng, chạy ví dụ 30 khách, mỗi khách 8 lượt (tổng cộng 240
 lượt) trong Terminal 2:
 
 ```powershell
-node .\scripts\simulate-customer-bills.js --customers=30 --visits=4 --seed=20261107 --history-days=90 --execute --allow-non-test-db
+node .\scripts\simulate-customer-bills.js --customers=30 --customer-offset=100 --visits=8 --seed=20261112 --history-days=90 --preference-strength=0.4 --execute --allow-non-test-db
 ```
+
+Mặc định `--visits=8`; nên dùng khoảng 6–10 lượt mỗi khách để mỗi người có
+lịch sử train và lượt test. Mỗi hồ sơ được gán ổn định 2–4 món ruột. Trong
+mỗi lượt, `--preference-strength=0.4` cho 40% xác suất ưu tiên thêm một món
+ruột; món ruột cũng có thể được chọn bình thường. Tham số này đồng thời điều
+chỉnh độ ưu tiên danh mục/nguyên liệu yêu thích. Giá trị hợp lệ từ 0 đến 1.
+Món phụ, đồ uống và tráng miệng không bị bắt buộc xuất hiện trong mọi bill.
+Log cho biết bao nhiêu tên món kích hoạt quy tắc ghép món khớp với menu đang
+bán; nếu tên khác, sửa `pairRules` theo đúng tên trong DB.
 
 Nếu script dừng giữa chừng, đừng chạy lại cả lệnh ngay: lượt lỗi có thể đã giữ
 bàn hoặc tạo bill mở. Kiểm tra reservation cuối cùng trong Workbench và xử lý
-nó trước. Nếu 5 lượt đầu đã hoàn tất, có thể chạy tiếp từ lượt thứ 6 bằng cách
-giữ nguyên các tham số và thêm `--start-visit=5`.
+nó trước. Lượt được phân bổ luân phiên qua các khách: 30 lượt đầu là mỗi khách
+ghé một lần, 30 lượt tiếp theo là lần ghé thứ hai, v.v. Nếu 30 lượt đầu đã hoàn
+tất, có thể chạy tiếp từ lượt thứ 31 bằng cách giữ nguyên các tham số, seed và
+thêm `--start-visit=30`:
 
-Mỗi lượt có cùng khách qua nhiều lần ghé; cách chọn món có tính đến số khách
-và danh mục món. Các giao dịch này là dữ liệu tổng hợp phục vụ thử nghiệm mô
-hình gợi ý, không phải lịch sử khách thật. Khi huấn luyện, chỉ lấy bill
+```powershell
+node .\scripts\simulate-customer-bills.js --customers=30 --customer-offset=100 --visits=8 --seed=20261112 --history-days=90 --preference-strength=0.4 --start-visit=30 --execute --allow-non-test-db
+```
+
+Trước khi ghi dữ liệu, script kiểm tra số reservation và bill đã thanh toán của
+các tài khoản trong batch. Chạy lại từ đầu với nhóm khách đã có bill sẽ bị từ
+chối; tiếp tục bằng `--start-visit` chỉ được phép khi lịch sử trước đó khớp
+chính xác số lượt đã hoàn tất và không có bill dở dang. Script không tự xóa
+bill nào.
+
+`--customer-offset=100` tạo tài khoản từ `sim-customer-0101@example.test`
+để không nhập thêm bill vào các tài khoản `sim-customer-0001` trở đi đã có
+lịch sử từ các batch cũ. Hãy chọn một offset chưa dùng; nếu cần đánh giá riêng
+batch mới, vẫn nên dùng database thử nghiệm riêng thay vì trộn với bill cũ.
+
+Mỗi lượt có cùng khách qua nhiều lần ghé; việc luân phiên giúp các lượt của
+cùng khách được trải trên toàn khoảng thời gian, để khách có bill ở cả train
+và test khi chia theo thời gian. Hồ sơ khẩu vị được giữ ổn định theo tài khoản
+mô phỏng, dựa trên danh mục và nguyên liệu món. Script phân loại
+`Nước` là đồ uống, `Cơm` là món chính. Các quy tắc ghép một số món được khai
+báo trong script chỉ là giả định để tạo tín hiệu đồng gọi món, không phải
+hành vi quan sát từ khách thật; cần chỉnh theo thực tế quán hoặc bỏ trước khi
+dùng tập mô phỏng để đánh giá mô hình. Các giao dịch này là dữ liệu tổng hợp
+phục vụ thử nghiệm, không phải lịch sử khách thật. Khi huấn luyện, chỉ lấy bill
 `da_thanh_toan` và món chưa bị xóa (`deleted_at IS NULL`).
+Script không tự gán dị ứng hoặc ghi vào `user_excluded_ingredients`; các hạn
+chế ăn uống không nên được bịa thành dữ liệu khách.
+
+Sau khi tạo xong bill, tạo lại snapshot train/test từ chính database đang được
+cấu hình trong `.env`:
+
+```powershell
+python .\recommender\create_train_test.py
+```
+
+## Dish recommendations
+
+The recommendation calculation and database refresh pipeline are Python; the
+Node.js API continues to serve the saved rows from `dish_recommendations`.
+Popularity counts the number of distinct paid bills containing each dish and
+excludes unavailable dishes. It does not use time decay or review feedback.
+
+Install the recommender dependencies and run its tests from the backend root:
+
+```powershell
+python -m pip install -r .\recommender\requirements.txt
+$env:PYTHONPATH = '.\recommender\src'
+python -m unittest discover -s .\recommender\tests -v
+```
+
+Rebuild and store the two supported rankings: global popularity and
+per-customer content-based recommendations:
+
+```powershell
+python .\recommender\run_pipeline.py
+```
+
+Preview a customer's content-based results without writing to the database:
+
+```powershell
+python .\recommender\run_pipeline.py --user 12
+```
+
+Create a chronological train/test dataset from paid bills (read-only database
+query; CSVs contain account IDs only, no customer names or contact details):
+
+```powershell
+python .\recommender\create_train_test.py
+```
+
+By default, the oldest 80% of distinct bill dates go to `train.csv` and the
+newest 20% go to `test.csv` under `recommender/data/`. The script also writes
+`split_metadata.json` with the cutoff date and split counts. Override the ratio
+or output folder with `--train-ratio 0.8` and `--output-dir <path>`.
+
+Evaluate popularity and content-based using only these CSVs for bill
+interactions; the current menu and ingredient catalog are read from the selected
+database. In PowerShell, select the same database used to create the split (for
+example `quan_an_db`) and run:
+
+```powershell
+$env:DB_NAME = 'quan_an_db'
+python .\recommender\create_train_test.py
+python .\recommender\evaluate_train_test.py --k 5 10 --evaluation-scope both
+```
+
+The evaluator reports macro-averaged Precision@K, Recall@K, and NDCG@K for
+customers with train history. `new` evaluates only dishes not seen in train;
+`all` also permits recommendations for dishes the customer has ordered before,
+which measures repeat-order usefulness. The default `both` reports both
+scopes. It ignores walk-in bills for personalized metrics, excludes unavailable
+dishes, does not use review feedback, reports an exact expected uniform-random
+baseline and each model's lift over it, and does not write to the database.
+This is separate from `run_pipeline.py`, which reads all paid bills and is for
+production recommendation refresh, not holdout evaluation.
+
+The Python pipeline reads the existing backend `.env` database settings. Its
+popularity input covers every available dish with a score of zero when the dish
+has not appeared in paid bills.
+Content-based settings are `CONTENT_BASED_LIMIT` (8),
+`CONTENT_BASED_CATEGORY_WEIGHT` (1.5), `CONTENT_BASED_LIKE_BONUS` (2),
+`CONTENT_BASED_DISLIKE_PENALTY` (2), `CONTENT_BASED_EXCLUDE_ORDERED` (true),
+`CONTENT_BASED_MIN_SCORE` (0.05), and `CONTENT_BASED_PREFERRED_WEIGHT` (1.5).
+Content-based history is linked through `reservations.user_id`; walk-in bills
+without an associated customer account are not used for personalized profiles.
+Preferred ingredients in `user_preferred_ingredients` add weight to a customer's
+content profile, including when the customer has no order history. Ingredients
+in `user_excluded_ingredients` always take precedence and dishes containing
+them are filtered out. Content-based recommendations use shared history and
+filtering helpers in `recommender/src/recommender/algorithms/common.py`; input
+columns, numeric values, and thresholds are checked in `validators.py`. A full
+pipeline run updates popularity and content-based rows; use `--user <id>` to
+preview and `--refresh-user <id>` to update one customer's content-based
+recommendations.
+
+The public Node.js endpoint `GET /api/recommendations` serves global
+popularity. Authenticated customers can use `GET /api/recommendations/me`;
+it returns their content-based rows when available and otherwise falls back to
+global popularity. Customers can retrieve and replace their preferred
+ingredients through `GET` and `PUT /api/users/me/preferred-ingredients`, and
+their excluded ingredients through `GET` and
+`PUT /api/users/me/excluded-ingredients`. Saving either list removes any matching
+ingredients from the other list in one transaction and refreshes that
+customer's recommendations. Every response filters unavailable dishes and
+customer recommendations filter dishes containing excluded ingredients.
+Supported models are `popularity` and `content_based`; set `?limit=10` (1-100).
 
 Manager staff endpoints:
 
@@ -357,6 +507,8 @@ refunds and forfeited deposits in its deposit income/expense ledger.
   confirmation after the manual bank transfer.
 - `GET /api/finance/deposits?from=YYYY-MM-DD&to=YYYY-MM-DD` — completed refund
   and forfeited-deposit entries for the manager finance report.
+- `GET /api/finance/top-dishes?period=day|week|month|three_months|all` —
+  manager-only ranking by quantity in paid bills; defaults to `all`.
 
 ## Paid Bill Reviews
 

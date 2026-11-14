@@ -44,6 +44,21 @@ async function listBills(req, res, next) {
   }
 }
 
+async function listTopSellingDishes(req, res, next) {
+  const period = req.query.period === undefined ? 'all' : String(req.query.period);
+  if (!['day', 'week', 'month', 'three_months', 'all'].includes(period)) {
+    return res.status(400).json({
+      message: 'period phải là day, week, month, three_months hoặc all.',
+    });
+  }
+  try {
+    const result = await financeModel.listTopSellingDishes(period);
+    res.json({ period, ...result });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // GET /api/finance/bills/:billId — chi tiết một bill (món, người xác nhận)
 async function getBillDetail(req, res, next) {
   try {
@@ -73,4 +88,9 @@ async function listDepositTransactions(req, res, next) {
   }
 }
 
-module.exports = { listBills, getBillDetail, listDepositTransactions };
+module.exports = {
+  listBills,
+  listTopSellingDishes,
+  getBillDetail,
+  listDepositTransactions,
+};

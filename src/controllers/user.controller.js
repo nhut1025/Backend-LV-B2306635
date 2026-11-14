@@ -2,6 +2,7 @@
 const { pool } = require('../config/db');
 const userModel = require('../models/user.model');
 const authModel = require('../models/auth.model');
+const { updateContentBasedRecommendations } = require('../utils/recommender');
 const bcrypt = require('bcrypt');
 
 const SALT_ROUNDS = 10;
@@ -102,25 +103,78 @@ async function getExcludedIngredients(req, res, next) {
   }
 }
 
-async function setExcludedIngredients(req, res, next) {
-  const conn = await pool.getConnection();
+async function getPreferredIngredients(req, res, next) {
   try {
-    const { ingredient_ids } = req.body;
-    if (!Array.isArray(ingredient_ids)) {
-      return res.status(400).json({ message: 'ingredient_ids phải là 1 mảng (có thể rỗng).' });
-    }
-
-    await conn.beginTransaction();
-    await userModel.replaceExcludedIngredients(conn, req.user.id, ingredient_ids);
-
-    await conn.commit();
-    res.json({ message: 'Đã cập nhật danh sách nguyên liệu loại trừ.', ingredient_ids });
+    const [rows] = await userModel.findPreferredIngredients(req.user.id);
+    res.json({ preferred_ingredients: rows });
   } catch (err) {
-    await conn.rollback();
     next(err);
-  } finally {
-    conn.release();
   }
+}
+
+function parseIngredientIds(value) {
+  if (!Array.isArray(value) || !value.every(
+    (id) => Number.isSafeInteger(id) && id > 0
+  )) {
+    return null;
+  }
+  return [...new Set(value)];
+}
+
+async function replaceIngredientPreferences(req, res, next, preference) {
+  const ingredientIds = parseIngredientIds(req.body.ingredient_ids);
+  if (!ingredientIds) {
+    return res.status(400).json({
+      message: 'ingredient_ids phải là mảng các số nguyên dương (có thể rỗng).',
+    });
+  }
+
+  let conn;
+  let committed = false;
+  try {
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    if (preference === 'preferred') {
+      await userModel.replacePreferredIngredients(conn, req.user.id, ingredientIds);
+    } else {
+      await userModel.replaceExcludedIngredients(conn, req.user.id, ingredientIds);
+    }
+    await conn.commit();
+    committed = true;
+  } catch (err) {
+    if (conn && !committed) await conn.rollback();
+    next(err);
+    return;
+  } finally {
+    if (conn) conn.release();
+  }
+
+  try {
+    await updateContentBasedRecommendations(req.user.id);
+  } catch (err) {
+    console.error('Không thể cập nhật gợi ý sau khi lưu sở thích nguyên liệu:', err);
+    return res.status(503).json({
+      message: 'Đã lưu danh sách nguyên liệu nhưng chưa cập nhật được gợi ý. Vui lòng thử lại.',
+    });
+  }
+
+  const responseKey = preference === 'preferred'
+    ? 'preferred_ingredient_ids'
+    : 'excluded_ingredient_ids';
+  return res.json({
+    message: preference === 'preferred'
+      ? 'Đã cập nhật nguyên liệu yêu thích.'
+      : 'Đã cập nhật danh sách nguyên liệu loại trừ.',
+    [responseKey]: ingredientIds,
+  });
+}
+
+async function setExcludedIngredients(req, res, next) {
+  return replaceIngredientPreferences(req, res, next, 'excluded');
+}
+
+async function setPreferredIngredients(req, res, next) {
+  return replaceIngredientPreferences(req, res, next, 'preferred');
 }
 
 async function createStaff(req, res, next) {
@@ -234,6 +288,8 @@ module.exports = {
   getReservationSummary,
   getExcludedIngredients,
   setExcludedIngredients,
+  getPreferredIngredients,
+  setPreferredIngredients,
   createStaff,
   getStaffList,
   updateStaff,

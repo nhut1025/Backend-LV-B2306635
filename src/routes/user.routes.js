@@ -56,5 +56,7 @@ router.put('/me/password', authMiddleware, ctrl.changePassword);
 router.get('/me/reservation-summary', authMiddleware, requireRole('customer'), ctrl.getReservationSummary);
 router.get('/me/excluded-ingredients', authMiddleware, requireRole('customer'), ctrl.getExcludedIngredients);
 router.put('/me/excluded-ingredients', authMiddleware, requireRole('customer'), ctrl.setExcludedIngredients);
+router.get('/me/preferred-ingredients', authMiddleware, requireRole('customer'), ctrl.getPreferredIngredients);
+router.put('/me/preferred-ingredients', authMiddleware, requireRole('customer'), ctrl.setPreferredIngredients);
 
 module.exports = router;

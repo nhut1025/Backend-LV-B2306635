@@ -40,7 +40,7 @@ async function findById(id) {
     [id]
   );
   const ingredientResult = await pool.query(
-    `SELECT i.id, i.name FROM ingredients i
+    `SELECT i.id, i.name, di.quantity_g FROM ingredients i
      JOIN dish_ingredients di ON di.ingredient_id = i.id
      JOIN dishes d ON d.id = di.dish_id
      WHERE d.id = ?`,
@@ -110,6 +110,31 @@ async function syncImages(connection, dishId, imageUrls) {
   }
 }
 
+async function syncIngredients(connection, dishId, ingredients) {
+  const [existingRows] = await connection.query(
+    'SELECT ingredient_id, quantity_g FROM dish_ingredients WHERE dish_id = ?',
+    [dishId]
+  );
+  const existingQuantities = new Map(
+    existingRows.map((row) => [Number(row.ingredient_id), row.quantity_g])
+  );
+
+  await connection.query('DELETE FROM dish_ingredients WHERE dish_id = ?', [dishId]);
+  if (ingredients.length > 0) {
+    const values = ingredients.map((ingredient) => {
+      const ingredientId = Number(ingredient.ingredient_id);
+      const quantity = ingredient.quantity_g === undefined
+        ? existingQuantities.get(ingredientId) ?? null
+        : ingredient.quantity_g;
+      return [dishId, ingredientId, quantity];
+    });
+    await connection.query(
+      'INSERT INTO dish_ingredients (dish_id, ingredient_id, quantity_g) VALUES ?',
+      [values]
+    );
+  }
+}
+
 async function create(connection, dish) {
   const [result] = await connection.query(
     `INSERT INTO dishes (name, description, price, category, category_id, image_url)
@@ -120,10 +145,7 @@ async function create(connection, dish) {
     ]
   );
   await syncImages(connection, result.insertId, dish.imageUrls);
-  if (dish.ingredient_ids.length > 0) {
-    const values = dish.ingredient_ids.map((ingredientId) => [result.insertId, ingredientId]);
-    await connection.query('INSERT INTO dish_ingredients (dish_id, ingredient_id) VALUES ?', [values]);
-  }
+  await syncIngredients(connection, result.insertId, dish.ingredients);
   return result;
 }
 
@@ -142,13 +164,7 @@ async function update(connection, id, dish) {
     ]
   );
   await syncImages(connection, id, dish.imageUrls);
-  if (Array.isArray(dish.ingredient_ids)) {
-    await connection.query('DELETE FROM dish_ingredients WHERE dish_id = ?', [id]);
-    if (dish.ingredient_ids.length > 0) {
-      const values = dish.ingredient_ids.map((ingredientId) => [id, ingredientId]);
-      await connection.query('INSERT INTO dish_ingredients (dish_id, ingredient_id) VALUES ?', [values]);
-    }
-  }
+  if (Array.isArray(dish.ingredients)) await syncIngredients(connection, id, dish.ingredients);
   return { ...result, matchedRows: existingRows.length };
 }
 

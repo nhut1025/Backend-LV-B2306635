@@ -77,30 +77,148 @@ const firstNames = [
 const lastNames = ['Nguyễn', 'Trần', 'Lê', 'Phạm', 'Hoàng', 'Huỳnh', 'Phan', 'Võ', 'Đặng', 'Bùi'];
 const notes = ['Ít cay', 'Không hành', 'Ít ngọt', 'Để riêng nước chấm'];
 
+// These are assumed synthetic co-ordering patterns, not observed restaurant behavior.
+const pairRules = [
+  { when: 'Lẩu Thái hải sản đặc biệt', with: ['Rau muống xào tỏi', 'Bia Tiger Crystal (Lon 330ml)'], probability: 0.7 },
+  { when: 'Lẩu riêu cua bắp bò', with: ['Rau muống xào tỏi', 'Bia Saigon Special (Lon 330ml)'], probability: 0.7 },
+  { when: 'Lẩu gà lá é Đà Lạt', with: ['Bia Tiger Nâu (Lon 330ml)'], probability: 0.7 },
+  { when: 'Bún chả Hà Nội nướng than', with: ['Chả giò hải sản', 'Pepsi (Lon 320ml)'], probability: 0.6 },
+  { when: 'Bánh xèo miền Tây đặc biệt', with: ['Gỏi ngó sen tôm thịt'], probability: 0.5 },
+  { when: 'Mực trứng chiên mắm bơ tỏi', with: ['Bia 333 (Lon 330ml)'], probability: 0.6 },
+  { when: 'Cơm tấm sườn bi chả mỡ hành', with: ['Coca-Cola (Lon 320ml)'], probability: 0.5 },
+  { when: 'Vịt quay tiêu bọc xôi chiên', with: ['Bia Budweiser (Lon 330ml)'], probability: 0.6 },
+];
+
 function customerIdentity(index) {
+  const identityRandom = createRandom(`customer-identity:${index}`);
   return {
-    fullName: `${pick(lastNames)} ${pick(firstNames)}`,
+    fullName: `${lastNames[Math.floor(identityRandom() * lastNames.length)]} ${firstNames[Math.floor(identityRandom() * firstNames.length)]}`,
     email: `sim-customer-${String(index).padStart(4, '0')}@example.test`,
     phone: randomPhone(index),
   };
 }
 
-function createPreferenceProfile(dishes) {
+function expectedVisitCount(customerIndex, startVisit, customerCount) {
+  const completedRounds = Math.floor(startVisit / customerCount);
+  const customersInPartialRound = startVisit % customerCount;
+  return completedRounds + (customerIndex < customersInPartialRound ? 1 : 0);
+}
+
+function validateCustomerVisitHistory(email, history, expected, startVisit) {
+  const reservations = Number(history ? history.reservation_count : 0);
+  const paidBills = Number(history ? history.paid_bill_count : 0);
+  const unfinishedBills = Number(history ? history.unfinished_bill_count : 0);
+  if (
+    reservations !== expected
+    || paidBills !== expected
+    || unfinishedBills > 0
+  ) {
+    throw new Error(
+      `Từ chối chạy để tránh tạo bill trùng: ${email} có ${reservations} reservation, `
+      + `${paidBills} bill đã thanh toán, ${unfinishedBills} bill chưa thanh toán; `
+      + `batch hiện tại cần đúng ${expected} lượt đã hoàn tất trước --start-visit=${startVisit}. `
+      + 'Chọn --customer-offset chưa dùng cho batch mới, hoặc kiểm tra và xử lý lượt dở dang trước khi tiếp tục.'
+    );
+  }
+}
+
+async function assertSimulationHistory(customerCount, customerOffset, startVisit) {
+  const emails = Array.from(
+    { length: customerCount },
+    (_, index) => customerIdentity(customerOffset + index + 1).email
+  );
+  const [rows] = await pool.query(
+    `SELECT u.email,
+            COUNT(DISTINCT r.id) AS reservation_count,
+            COUNT(DISTINCT CASE
+              WHEN b.status = 'da_thanh_toan' AND b.payment_method IS NOT NULL THEN b.id
+            END) AS paid_bill_count,
+            COUNT(DISTINCT CASE
+              WHEN b.id IS NOT NULL
+               AND (b.status <> 'da_thanh_toan' OR b.payment_method IS NULL) THEN b.id
+            END) AS unfinished_bill_count
+     FROM users u
+     LEFT JOIN reservations r ON r.user_id = u.id
+     LEFT JOIN bills b ON b.reservation_id = r.id
+     WHERE u.email IN (?)
+     GROUP BY u.id, u.email`,
+    [emails]
+  );
+  const historyByEmail = new Map(rows.map((row) => [row.email, row]));
+
+  for (let customerIndex = 0; customerIndex < customerCount; customerIndex += 1) {
+    const email = emails[customerIndex];
+    const expected = expectedVisitCount(customerIndex, startVisit, customerCount);
+    validateCustomerVisitHistory(
+      email,
+      historyByEmail.get(email),
+      expected,
+      startVisit
+    );
+  }
+}
+
+function createPreferenceProfile(dishes, customerKey) {
+  const profileRandom = createRandom(`customer-profile:${customerKey}`);
+  const profileRandomInt = (minimum, maximum) => (
+    minimum + Math.floor(profileRandom() * (maximum - minimum + 1))
+  );
   const categories = [...new Set(dishes.map((dish) => dish.category || 'Khác'))];
   const preferredCategories = new Set(
     categories
-      .map((category) => ({ category, score: random() }))
+      .map((category) => ({ category, score: profileRandom() }))
       .sort((left, right) => right.score - left.score)
-      .slice(0, Math.min(categories.length, randomInt(1, Math.min(3, categories.length))))
+      .slice(0, Math.min(categories.length, profileRandomInt(1, Math.min(3, categories.length))))
       .map(({ category }) => category)
+  );
+  const ingredients = [...new Set(dishes.flatMap((dish) => dish.ingredients || []))].sort();
+  const preferredIngredientCount = ingredients.length > 0
+    ? profileRandomInt(Math.min(2, ingredients.length), Math.min(5, ingredients.length))
+    : 0;
+  const preferredIngredients = new Set(
+    ingredients
+      .map((ingredient) => ({ ingredient, score: profileRandom() }))
+      .sort((left, right) => right.score - left.score)
+      .slice(0, preferredIngredientCount)
+      .map(({ ingredient }) => ingredient)
+  );
+  const favoriteDishCount = profileRandomInt(
+    Math.min(2, dishes.length),
+    Math.min(4, dishes.length)
+  );
+  const favoriteDishIds = new Set(
+    dishes
+      .map((dish) => ({
+        dish,
+        score: profileRandom()
+          + (preferredCategories.has(dish.category || 'Khác') ? 1 : 0)
+          + ((dish.ingredients || []).some((ingredient) => preferredIngredients.has(ingredient)) ? 1 : 0),
+      }))
+      .sort((left, right) => right.score - left.score)
+      .slice(0, favoriteDishCount)
+      .map(({ dish }) => Number(dish.id))
   );
   return {
     preferredCategories,
-    priceSensitivity: random() * 1.3,
+    preferredIngredients,
+    favoriteDishIds,
+    priceSensitivity: profileRandom() * 1.3,
   };
 }
 
-function chooseDishes(dishes, count, profile, popularity, excludedIds = new Set()) {
+function isDishPreferred(dish, profile) {
+  return profile.preferredCategories.has(dish.category || 'Khác')
+    || (dish.ingredients || []).some((ingredient) => profile.preferredIngredients.has(ingredient));
+}
+
+function chooseDishes(
+  dishes,
+  count,
+  profile,
+  popularity,
+  excludedIds = new Set(),
+  preferenceStrength = 0.4
+) {
   const selected = [];
   const available = dishes.filter((dish) => !excludedIds.has(Number(dish.id)));
   const pool = [...available];
@@ -108,11 +226,16 @@ function chooseDishes(dishes, count, profile, popularity, excludedIds = new Set(
   while (selected.length < count && pool.length > 0) {
     const dish = weightedPick(pool, (item) => {
       const category = item.category || 'Khác';
-      const categoryWeight = profile.preferredCategories.has(category) ? 3.2 : 1;
+      const categoryWeight = profile.preferredCategories.has(category)
+        ? 1 + 5.5 * preferenceStrength
+        : 1;
+      const ingredientWeight = (item.ingredients || []).some(
+        (ingredient) => profile.preferredIngredients.has(ingredient)
+      ) ? 1 + 3.5 * preferenceStrength : 1;
       const averagePrice = Math.max(1, Number(item.price));
       const priceWeight = 1 / Math.pow(averagePrice / 100000, profile.priceSensitivity);
       const popularityWeight = 1 + Math.min(2, (popularity.get(Number(item.id)) || 0) * 0.08);
-      return categoryWeight * priceWeight * popularityWeight;
+      return categoryWeight * ingredientWeight * priceWeight * popularityWeight;
     });
     selected.push(dish);
     pool.splice(pool.indexOf(dish), 1);
@@ -121,32 +244,63 @@ function chooseDishes(dishes, count, profile, popularity, excludedIds = new Set(
 }
 
 function quantityFor(dish) {
-  const category = String(dish.category || '').toLowerCase();
-  if (category.includes('đồ uống') || category.includes('món ăn kèm')) {
+  const type = dishType(dish);
+  if (type === 'drink' || type === 'side') {
     return random() < 0.28 ? 2 : 1;
   }
   return random() < 0.12 ? 2 : 1;
 }
 
+function normalizeCategory(category) {
+  return String(category || '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .trim()
+    .toLowerCase()
+    .replace(/đ/g, 'd');
+}
+
 function dishType(dish) {
-  const category = String(dish.category || '').toLowerCase();
-  if (/(đồ uống|thức uống|nước uống|beverage|drink)/i.test(category)) return 'drink';
-  if (/(tráng miệng|dessert)/i.test(category)) return 'dessert';
-  if (/(khai vị|món ăn kèm|món phụ|appetizer|side)/i.test(category)) return 'side';
-  if (/(món chính|main)/i.test(category)) return 'main';
+  const category = normalizeCategory(dish.category);
+  if (category === 'nuoc' || /(do uong|thuc uong|nuoc uong|beverage|drink)/.test(category)) return 'drink';
+  if (/(trang mieng|dessert)/.test(category)) return 'dessert';
+  if (/(khai vi|an kem|mon phu|appetizer|side)/.test(category)) return 'side';
+  if (category === 'com' || /(mon chinh|mon nhau|main)/.test(category)) return 'main';
   return 'other';
 }
 
-function makeItems(dishes, profile, popularity, minCount, maxCount, excludedIds) {
+function makeItems(
+  dishes,
+  profile,
+  popularity,
+  minCount,
+  maxCount,
+  excludedIds,
+  preferenceStrength
+) {
   const count = randomInt(minCount, Math.min(maxCount, dishes.length - excludedIds.size));
-  return chooseDishes(dishes, count, profile, popularity, excludedIds).map((dish) => ({
+  return chooseDishes(
+    dishes,
+    count,
+    profile,
+    popularity,
+    excludedIds,
+    preferenceStrength
+  ).map((dish) => ({
     dish,
     quantity: quantityFor(dish),
     note: random() < 0.08 ? pick(notes) : null,
   }));
 }
 
-function makeMealItems(dishes, profile, popularity, partySize, excludedIds) {
+function makeMealItems(
+  dishes,
+  profile,
+  popularity,
+  partySize,
+  excludedIds,
+  preferenceStrength
+) {
   const available = dishes.filter((dish) => !excludedIds.has(Number(dish.id)));
   const selected = [];
   const selectedIds = new Set(excludedIds);
@@ -156,7 +310,8 @@ function makeMealItems(dishes, profile, popularity, partySize, excludedIds) {
       Math.min(count, candidates.filter((dish) => !selectedIds.has(Number(dish.id))).length),
       profile,
       popularity,
-      selectedIds
+      selectedIds,
+      preferenceStrength
     );
     for (const dish of choices) {
       const quantity = quantityForDish(dish);
@@ -166,21 +321,58 @@ function makeMealItems(dishes, profile, popularity, partySize, excludedIds) {
     return choices.length;
   };
 
+  const favorites = available.filter((dish) => (
+    profile.favoriteDishIds.has(Number(dish.id))
+  ));
+  if (favorites.length > 0 && random() < preferenceStrength) {
+    addDishes(favorites, 1, (dish) => quantityFor(dish));
+  }
+
   const mains = available.filter((dish) => dishType(dish) === 'main');
   const foodFallback = available.filter((dish) => dishType(dish) !== 'drink');
   const mainCandidates = mains.length > 0 ? mains : foodFallback;
   const mainPortions = Math.max(1, Math.ceil(partySize / 2));
-  const mainCount = addDishes(mainCandidates, mainPortions);
-  if (mainCount === 0) {
+  const mainCandidateIds = new Set(mainCandidates.map((dish) => Number(dish.id)));
+  const selectedMainCount = selected.filter(({ dish }) => (
+    mainCandidateIds.has(Number(dish.id))
+  )).length;
+  const mainCount = addDishes(
+    mainCandidates,
+    Math.max(0, mainPortions - selectedMainCount)
+  );
+  const totalMainCount = selectedMainCount + mainCount;
+  if (totalMainCount === 0) {
     throw new Error('Không tìm thấy món ăn phù hợp để tạo bill (chỉ còn đồ uống hoặc không còn món).');
   }
-  if (mainCount < mainPortions) {
-    selected[0].quantity += mainPortions - mainCount;
+  if (totalMainCount < mainPortions) {
+    const firstMain = selected.find(({ dish }) => (
+      mainCandidateIds.has(Number(dish.id))
+    ));
+    firstMain.quantity += mainPortions - totalMainCount;
   }
 
   const sides = available.filter((dish) => dishType(dish) === 'side');
-  if (sides.length > 0) {
+  if (sides.length > 0 && random() < 0.65) {
     addDishes(sides, Math.min(sides.length, randomInt(1, Math.min(2, Math.ceil(partySize / 2)))));
+  }
+
+  const dishesByName = new Map(available.map((dish) => [dish.name, dish]));
+  for (const { dish } of [...selected]) {
+    for (const rule of pairRules.filter((candidate) => candidate.when === dish.name)) {
+      for (const companionName of rule.with) {
+        const companion = dishesByName.get(companionName);
+        if (
+          !companion
+          || selectedIds.has(Number(companion.id))
+          || random() >= rule.probability
+        ) continue;
+        const quantity = dishType(companion) === 'drink'
+          ? Math.max(1, Math.ceil(partySize / 2))
+          : 1;
+        selected.push({ dish: companion, quantity, note: null });
+        selectedIds.add(Number(companion.id));
+      }
+    }
   }
 
   const drinks = available.filter((dish) => (
@@ -209,6 +401,42 @@ function makeMealItems(dishes, profile, popularity, partySize, excludedIds) {
   return selected;
 }
 
+async function attachDishIngredients(dishes) {
+  const dishIds = dishes.map((dish) => Number(dish.id));
+  if (dishIds.length === 0) return dishes;
+  const [rows] = await pool.query(
+    `SELECT di.dish_id, i.name
+     FROM dish_ingredients di
+     JOIN ingredients i ON i.id = di.ingredient_id
+     WHERE di.dish_id IN (?)
+     ORDER BY di.dish_id, i.name`,
+    [dishIds]
+  );
+  const ingredientsByDish = new Map();
+  for (const row of rows) {
+    const dishId = Number(row.dish_id);
+    if (!ingredientsByDish.has(dishId)) ingredientsByDish.set(dishId, []);
+    ingredientsByDish.get(dishId).push(row.name);
+  }
+  return dishes.map((dish) => ({
+    ...dish,
+    ingredients: ingredientsByDish.get(Number(dish.id)) || [],
+  }));
+}
+
+function warnAboutUnavailablePairRules(dishes) {
+  const dishNames = new Set(dishes.map((dish) => dish.name));
+  const missingNames = new Set(
+    pairRules.flatMap((rule) => [rule.when, ...rule.with]).filter((name) => !dishNames.has(name))
+  );
+  if (missingNames.size > 0) {
+    console.warn(
+      `Cảnh báo: không áp dụng được quy tắc ghép món vì thiếu tên món trong danh sách đang bán: `
+      + `${[...missingNames].join(', ')}.`
+    );
+  }
+}
+
 function dateAndTimeFor(visitIndex, rules) {
   const [openHour, openMinute] = rules.reservation_open_time.split(':').map(Number);
   const [closeHour, closeMinute] = rules.reservation_close_time.split(':').map(Number);
@@ -230,13 +458,17 @@ function shiftDate(date, days) {
   return shifted.toISOString().slice(0, 10);
 }
 
-function historicalDateAndTime(visitIndex, totalVisits, historyDays, rules) {
-  const daysAgo = Math.max(
-    1,
-    historyDays - Math.floor(
-      (visitIndex * Math.max(0, historyDays - 1)) / Math.max(1, totalVisits - 1)
-    )
+function historicalDateAndTime(visitIndex, totalVisits, customerCount, historyDays, rules) {
+  const visitsPerCustomer = totalVisits / customerCount;
+  const visitRound = Math.floor(visitIndex / customerCount);
+  const customerPosition = visitIndex % customerCount;
+  const roundStart = Math.floor((visitRound * historyDays) / visitsPerCustomer);
+  const roundEnd = Math.floor(((visitRound + 1) * historyDays) / visitsPerCustomer) - 1;
+  const roundLength = Math.max(1, roundEnd - roundStart + 1);
+  const dayOffset = roundStart + Math.floor(
+    (customerPosition * Math.max(0, roundLength - 1)) / Math.max(1, customerCount - 1)
   );
+  const daysAgo = Math.max(1, historyDays - dayOffset);
   const date = shiftDate(new Date().toISOString().slice(0, 10), -daysAgo);
   const [openHour, openMinute] = rules.reservation_open_time.split(':').map(Number);
   const [closeHour, closeMinute] = rules.reservation_close_time.split(':').map(Number);
@@ -433,11 +665,13 @@ async function runVisit({
   rules,
   visitIndex,
   totalVisits,
+  customerCount,
   historyDays,
   onlineAvailable,
   onlineRatio,
   preorderRate,
   reviewRate,
+  preferenceStrength,
 }) {
   const partySize = randomInt(1, 6);
   const tableSuggestion = await request(
@@ -450,7 +684,15 @@ async function runVisit({
   const profileDishIds = new Set();
   const usePreorder = dishes.length > 2 && random() < preorderRate;
   const preorderItems = usePreorder
-    ? makeItems(dishes, profile, popularity, 1, 2, profileDishIds)
+    ? makeItems(
+      dishes,
+      profile,
+      popularity,
+      1,
+      2,
+      profileDishIds,
+      preferenceStrength
+    )
     : [];
   for (const item of preorderItems) {
     profileDishIds.add(Number(item.dish.id));
@@ -500,6 +742,7 @@ async function runVisit({
   const { date: historyDate, time: historyTime } = historicalDateAndTime(
     visitIndex,
     totalVisits,
+    customerCount,
     historyDays,
     rules
   );
@@ -548,7 +791,14 @@ async function runVisit({
     }
   }
 
-  const orderItems = makeMealItems(dishes, profile, popularity, partySize, profileDishIds);
+  const orderItems = makeMealItems(
+    dishes,
+    profile,
+    popularity,
+    partySize,
+    profileDishIds,
+    preferenceStrength
+  );
   let orderItemOffset = 10;
   for (const item of orderItems) {
     const added = await request(`/api/bills/${billId}/items`, {
@@ -612,7 +862,7 @@ async function runVisit({
     const billDishesById = new Map(dishes.map((dish) => [Number(dish.id), dish]));
     const likedItemIds = itemIds.map((id) => {
       const dish = billDishesById.get(billItemDishes.get(id));
-      const preferred = profile.preferredCategories.has(dish?.category || 'Khác');
+      const preferred = dish ? isDishPreferred(dish, profile) : false;
       return {
         bill_item_id: id,
         sentiment: random() < (preferred ? 0.9 : 0.65) ? 'like' : 'dislike',
@@ -674,19 +924,30 @@ async function runVisit({
 
 async function main() {
   const customers = integerOption('customers', 20, 1, 200);
-  const visitsPerCustomer = integerOption('visits', 3, 1, 100);
+  const customerOffset = integerOption('customer-offset', 0, 0, 99999999);
+  const visitsPerCustomer = integerOption('visits', 8, 1, 100);
+  if (customerOffset + customers > 99999999) {
+    throw new Error('--customer-offset + --customers không được vượt quá 99999999.');
+  }
   const totalVisits = customers * visitsPerCustomer;
   const historyDays = integerOption('history-days', 180, 1, 3650);
   const startVisit = integerOption('start-visit', 0, 0, totalVisits);
+  if (historyDays < visitsPerCustomer) {
+    throw new Error('--history-days phải lớn hơn hoặc bằng --visits để các vòng ghé trải trên nhiều ngày.');
+  }
   if (totalVisits > 1000) {
     throw new Error('Tối đa 1000 lượt mỗi lần chạy để tránh tạo dữ liệu quá lớn ngoài ý muốn.');
   }
   const preorderRate = Number(option('preorder-rate', 0.15));
   const onlineRatio = Number(option('online-ratio', 0.25));
   const reviewRate = Number(option('review-rate', 0.35));
+  const preferenceStrength = Number(option('preference-strength', 0.4));
   const rates = [preorderRate, onlineRatio, reviewRate];
   if (rates.some((rate) => !Number.isFinite(rate) || rate < 0 || rate > 1)) {
     throw new Error('--preorder-rate, --online-ratio và --review-rate phải nằm trong khoảng 0..1.');
+  }
+  if (!Number.isFinite(preferenceStrength) || preferenceStrength < 0 || preferenceStrength > 1) {
+    throw new Error('--preference-strength phải nằm trong khoảng 0..1.');
   }
   if (!args.has('execute')) {
     throw new Error('Chưa xác nhận ghi dữ liệu. Thêm cờ --execute để tiếp tục.');
@@ -699,7 +960,7 @@ async function main() {
       + 'Dùng DB test/dev/sim hoặc xác nhận rõ bằng --allow-non-test-db.'
     );
   }
-
+  await assertSimulationHistory(customers, customerOffset, startVisit);
   const serviceToken = await login(
     process.env.SIM_SERVICE_EMAIL,
     process.env.SIM_SERVICE_PASSWORD,
@@ -720,6 +981,10 @@ async function main() {
   if (!dishes || dishes.length < 2) {
     throw new Error('Cần ít nhất 2 món đang phục vụ để tạo lượt gọi món.');
   }
+  const dishesWithIngredients = await attachDishIngredients(dishes);
+  const availablePairRuleNames = new Set(dishesWithIngredients.map((dish) => dish.name));
+  const matchedPairRules = pairRules.filter((rule) => availablePairRuleNames.has(rule.when));
+  warnAboutUnavailablePairRules(dishesWithIngredients);
 
   const [bankSettings] = await pool.query(
     `SELECT setting_key, setting_value FROM settings
@@ -732,67 +997,85 @@ async function main() {
   const customerPassword = process.env.SIM_CUSTOMER_PASSWORD || 'Simulation@12345';
   const identities = [];
   for (let index = 1; index <= customers; index += 1) {
-    identities.push(await ensureCustomer(index, customerPassword));
+    identities.push(await ensureCustomer(customerOffset + index, customerPassword));
   }
 
   console.log(
-    `Bắt đầu mô phỏng ${customers} khách x ${visitsPerCustomer} lượt; `
+    `Bắt đầu mô phỏng ${customers} khách x ${visitsPerCustomer} lượt `
+    + `(mã khách ${customerOffset + 1}–${customerOffset + customers}); `
     + `seed=${seed}; database=${dbName}; online=${onlineAvailable ? 'có thể dùng' : 'không cấu hình, dùng tiền mặt'}.`
+  );
+  console.log(
+    `Mỗi hồ sơ giữ 2–4 món ruột; xác suất gọi lại mỗi lượt=${preferenceStrength}; `
+    + `quy tắc ghép món khớp tên kích hoạt=${matchedPairRules.length}/${pairRules.length}.`
   );
   console.log(
     `Ngày đặt bàn, cọc, gọi món, thanh toán được mô phỏng trong ${historyDays} ngày trước hôm nay.`
   );
 
   const popularity = new Map();
-  let visitIndex = startVisit;
   let completed = startVisit;
-  const firstCustomerIndex = Math.floor(startVisit / visitsPerCustomer);
-  for (let customerIndex = firstCustomerIndex; customerIndex < identities.length; customerIndex += 1) {
+  const customerTokens = new Map();
+  const profiles = identities.map((identity) => (
+    createPreferenceProfile(dishesWithIngredients, identity.email)
+  ));
+  for (let visitIndex = startVisit; visitIndex < totalVisits; visitIndex += 1) {
+    const customerIndex = visitIndex % customers;
     const identity = identities[customerIndex];
-    const customerToken = await login(identity.email, customerPassword, 'customer');
-    const profile = createPreferenceProfile(dishes);
-    const firstVisitForCustomer = customerIndex === firstCustomerIndex
-      ? startVisit % visitsPerCustomer
-      : 0;
-    for (let visit = firstVisitForCustomer; visit < visitsPerCustomer; visit += 1) {
-      const result = await runVisit({
-        identity,
-        customerToken,
-        serviceToken,
-        kitchenToken,
-        cashierToken,
-        dishes,
-        profile,
-        popularity,
-        rules,
-        visitIndex,
-        totalVisits,
-        historyDays,
-        onlineAvailable,
-        onlineRatio,
-        preorderRate,
-        reviewRate,
-      });
-      visitIndex += 1;
-      completed += 1;
-      console.log(
-        `[${completed}/${totalVisits}] ${identity.email}: bill #${result.billId}, `
-        + `${result.partySize} khách, ${result.itemCount} dòng món [${result.items}], `
-        + `tổng ${result.totalAmount.toFixed(0)}, `
-        + `còn thu ${result.amountDue.toFixed(0)}, ${result.paymentMethod}, `
-        + `ngày ghé mô phỏng ${result.date} ${result.time}.`
+    if (!customerTokens.has(customerIndex)) {
+      customerTokens.set(
+        customerIndex,
+        await login(identity.email, customerPassword, 'customer')
       );
     }
+    const result = await runVisit({
+      identity,
+      customerToken: customerTokens.get(customerIndex),
+      serviceToken,
+      kitchenToken,
+      cashierToken,
+      dishes: dishesWithIngredients,
+      profile: profiles[customerIndex],
+      popularity,
+      rules,
+      visitIndex,
+      totalVisits,
+      customerCount: customers,
+      historyDays,
+      onlineAvailable,
+      onlineRatio,
+      preorderRate,
+      reviewRate,
+      preferenceStrength,
+    });
+    completed += 1;
+    console.log(
+      `[${completed}/${totalVisits}] ${identity.email}: bill #${result.billId}, `
+      + `${result.partySize} khách, ${result.itemCount} dòng món [${result.items}], `
+      + `tổng ${result.totalAmount.toFixed(0)}, `
+      + `còn thu ${result.amountDue.toFixed(0)}, ${result.paymentMethod}, `
+      + `ngày ghé mô phỏng ${result.date} ${result.time}.`
+    );
   }
 
   console.log(`Hoàn tất: ${completed} bill đã thanh toán. Seed để tái lập: ${seed}`);
 }
 
-main()
-  .catch((error) => {
-    console.error(`Mô phỏng thất bại: ${error.message}`);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await pool.end();
-  });
+if (require.main === module) {
+  main()
+    .catch((error) => {
+      console.error(`Mô phỏng thất bại: ${error.message}`);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await pool.end();
+    });
+}
+
+module.exports = {
+  createPreferenceProfile,
+  expectedVisitCount,
+  makeMealItems,
+  isDishPreferred,
+  validateCustomerVisitHistory,
+};

@@ -241,7 +241,11 @@ async function readyItems(req, res, next) {
 async function advanceItem(req, res, next) {
   try {
     const { itemId } = req.params;
-    const nextStatus = await billModel.advanceItemStatus(itemId);
+    const nextStatus = await billModel.advanceItemStatus(
+      itemId,
+      req.user.id,
+      req.body?.expected_status
+    );
 
     const item = await billModel.findQueueItemById(itemId);
     emitToRoom('kitchen', 'kitchen:item-updated', item);
@@ -249,7 +253,7 @@ async function advanceItem(req, res, next) {
       emitToRoom('phuc_vu', 'service:item-ready', item);
     }
 
-    res.json({ message: `Đã chuyển sang ${nextStatus}.`, status: nextStatus });
+    res.json({ message: `Đã chuyển sang ${nextStatus}.`, status: nextStatus, item });
   } catch (err) {
     next(err);
   }

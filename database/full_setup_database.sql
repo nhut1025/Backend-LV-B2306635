@@ -152,13 +152,35 @@ CREATE TABLE IF NOT EXISTS dish_images (
 CREATE TABLE IF NOT EXISTS dish_ingredients (
   dish_id INT UNSIGNED NOT NULL,
   ingredient_id INT UNSIGNED NOT NULL,
+  quantity_g DECIMAL(10,2) NULL,
   PRIMARY KEY (dish_id, ingredient_id),
   FOREIGN KEY (dish_id) REFERENCES dishes(id) ON DELETE CASCADE,
   FOREIGN KEY (ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+SET @col_exists = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'dish_ingredients'
+    AND column_name = 'quantity_g'
+);
+SET @sql = IF(@col_exists = 0,
+  'ALTER TABLE dish_ingredients ADD COLUMN quantity_g DECIMAL(10,2) NULL AFTER ingredient_id',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- ============ 8. USER_EXCLUDED_INGREDIENTS ============
 CREATE TABLE IF NOT EXISTS user_excluded_ingredients (
+  user_id INT UNSIGNED NOT NULL,
+  ingredient_id INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, ingredient_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS user_preferred_ingredients (
   user_id INT UNSIGNED NOT NULL,
   ingredient_id INT UNSIGNED NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -343,11 +365,15 @@ CREATE TABLE IF NOT EXISTS bill_items (
   quantity INT NOT NULL,
   unit_price DECIMAL(10,2) NOT NULL,
   status ENUM('cho_xac_nhan','dang_che_bien','san_sang','da_phuc_vu') NOT NULL DEFAULT 'cho_xac_nhan',
+  accepted_by INT UNSIGNED NULL,
+  accepted_by_name VARCHAR(120) NULL,
   note VARCHAR(255) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted_at DATETIME NULL,
   FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE,
-  FOREIGN KEY (dish_id) REFERENCES dishes(id)
+  FOREIGN KEY (dish_id) REFERENCES dishes(id),
+  CONSTRAINT fk_bill_items_accepted_by
+    FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Nếu bill_items đã tồn tại từ trước (chưa có cột status) -> bổ sung
@@ -357,6 +383,42 @@ SET @col_exists = (
 );
 SET @sql = IF(@col_exists = 0,
   "ALTER TABLE bill_items ADD COLUMN status ENUM('cho_xac_nhan','dang_che_bien','san_sang','da_phuc_vu') NOT NULL DEFAULT 'cho_xac_nhan' AFTER unit_price",
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- Lưu nhân viên bếp đầu tiên nhận món, đồng thời giữ lại tên để tra cứu về sau.
+SET @user_id_type = (
+  SELECT COLUMN_TYPE FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'id'
+);
+SET @col_exists = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'bill_items' AND column_name = 'accepted_by'
+);
+SET @sql = IF(@col_exists = 0,
+  CONCAT('ALTER TABLE bill_items ADD COLUMN accepted_by ', @user_id_type, ' NULL AFTER status'),
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'bill_items' AND column_name = 'accepted_by_name'
+);
+SET @sql = IF(@col_exists = 0,
+  'ALTER TABLE bill_items ADD COLUMN accepted_by_name VARCHAR(120) NULL AFTER accepted_by',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @fk_exists = (
+  SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'bill_items'
+    AND COLUMN_NAME = 'accepted_by' AND REFERENCED_TABLE_NAME = 'users'
+);
+SET @sql = IF(@fk_exists = 0,
+  'ALTER TABLE bill_items ADD CONSTRAINT fk_bill_items_accepted_by FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL',
   'SELECT 1'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

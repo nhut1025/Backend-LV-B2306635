@@ -84,6 +84,7 @@ CREATE TABLE dish_images (
 CREATE TABLE dish_ingredients (
   dish_id INT UNSIGNED NOT NULL,
   ingredient_id INT UNSIGNED NOT NULL,
+  quantity_g DECIMAL(10,2) NULL,
   PRIMARY KEY (dish_id, ingredient_id),
   INDEX idx_dish_ingredients_ingredient (ingredient_id),
   FOREIGN KEY (dish_id) REFERENCES dishes(id) ON DELETE CASCADE,
@@ -354,6 +355,16 @@ CREATE TABLE recommendation_evaluations (
   evaluated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 25. USER_PREFERRED_INGREDIENTS
+CREATE TABLE user_preferred_ingredients (
+  user_id INT UNSIGNED NOT NULL,
+  ingredient_id INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, ingredient_id),
+  INDEX idx_user_preferred_ingredient (ingredient_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 -- =====================================================================
 -- DỮ LIỆU MẶC ĐỊNH
 -- =====================================================================

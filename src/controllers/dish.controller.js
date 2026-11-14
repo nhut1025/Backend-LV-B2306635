@@ -57,6 +57,65 @@ function resolveImageUrls(imageUrls, legacyImageUrl) {
   return { imageUrls: [...new Set(rawUrls.map((url) => url.trim()))] };
 }
 
+function resolveIngredients(body, required) {
+  const hasIngredients = body.ingredients !== undefined;
+  const hasLegacyIds = body.ingredient_ids !== undefined;
+  if (hasIngredients && hasLegacyIds) {
+    return { error: 'Chỉ gửi một trong ingredients hoặc ingredient_ids.' };
+  }
+  if (!hasIngredients && !hasLegacyIds) {
+    return { ingredients: required ? [] : undefined };
+  }
+
+  const rawIngredients = hasIngredients
+    ? body.ingredients
+    : Array.isArray(body.ingredient_ids)
+      ? body.ingredient_ids.map((ingredientId) => ({ ingredient_id: ingredientId }))
+      : body.ingredient_ids;
+  if (!Array.isArray(rawIngredients)) {
+    return { error: 'ingredients phải là một danh sách nguyên liệu.' };
+  }
+
+  const seenIds = new Set();
+  const ingredients = [];
+  for (const ingredient of rawIngredients) {
+    if (!ingredient || typeof ingredient !== 'object' || Array.isArray(ingredient)) {
+      return { error: 'Mỗi nguyên liệu phải có ingredient_id hợp lệ.' };
+    }
+
+    const ingredientId = Number(ingredient.ingredient_id);
+    if (!Number.isSafeInteger(ingredientId) || ingredientId < 1) {
+      return { error: 'ingredient_id phải là số nguyên dương.' };
+    }
+    if (seenIds.has(ingredientId)) {
+      return { error: 'Không được gửi trùng nguyên liệu.' };
+    }
+    seenIds.add(ingredientId);
+
+    const normalized = { ingredient_id: ingredientId };
+    if (Object.prototype.hasOwnProperty.call(ingredient, 'quantity_g')
+      && ingredient.quantity_g !== undefined) {
+      if (ingredient.quantity_g === null || ingredient.quantity_g === '') {
+        normalized.quantity_g = null;
+      } else {
+        const quantity = Number(ingredient.quantity_g);
+        if (
+          !Number.isFinite(quantity)
+          || quantity <= 0
+          || quantity > 99999999.99
+          || Number(quantity.toFixed(2)) !== quantity
+        ) {
+          return { error: 'quantity_g phải là số gam dương, tối đa 2 chữ số thập phân.' };
+        }
+        normalized.quantity_g = quantity;
+      }
+    }
+    ingredients.push(normalized);
+  }
+
+  return { ingredients };
+}
+
 async function getById(req, res, next) {
   try {
     const { id } = req.params;
@@ -71,7 +130,16 @@ async function getById(req, res, next) {
 
     const [ingredientRows] = ingredientResult;
     const [imageRows] = imageResult;
-    dish.ingredients = ingredientRows;
+    const canViewIngredientQuantities = Boolean(
+      req.user && ['manager', 'phuc_vu', 'thu_ngan', 'kitchen'].includes(req.user.role)
+    );
+    dish.ingredients = ingredientRows.map((ingredient) => ({
+      id: ingredient.id,
+      name: ingredient.name,
+      ...(canViewIngredientQuantities && {
+        quantity_g: ingredient.quantity_g == null ? null : Number(ingredient.quantity_g),
+      }),
+    }));
     dish.images = imageRows.map((image) => image.image_url);
     if (dish.images.length === 0 && dish.image_url) dish.images = [dish.image_url];
     dish.contains_excluded_ingredient = false;
@@ -116,7 +184,7 @@ function uploadImage(req, res) {
 async function create(req, res, next) {
   const conn = await pool.getConnection();
   try {
-    const { name, description, price, category, category_id, image_url, image_urls, ingredient_ids } = req.body;
+    const { name, description, price, category, category_id, image_url, image_urls } = req.body;
 
     if (!name || price === undefined || price === null) {
       return res.status(400).json({ message: 'Thiếu name hoặc price.' });
@@ -130,13 +198,15 @@ async function create(req, res, next) {
     const resolvedCategory = categoryResult.category;
     const imageResult = resolveImageUrls(image_urls, image_url);
     if (imageResult.error) return res.status(400).json({ message: imageResult.error });
+    const ingredientResult = resolveIngredients(req.body, true);
+    if (ingredientResult.error) return res.status(400).json({ message: ingredientResult.error });
 
     await conn.beginTransaction();
 
     const result = await dishModel.create(conn, {
       name, description: description || null, price,
       categoryId: resolvedCategory?.id || null, categoryName: resolvedCategory?.name || null,
-      imageUrls: imageResult.imageUrls, ingredient_ids: Array.isArray(ingredient_ids) ? ingredient_ids : [],
+      imageUrls: imageResult.imageUrls, ingredients: ingredientResult.ingredients,
     });
     const dishId = result.insertId;
 
@@ -145,7 +215,8 @@ async function create(req, res, next) {
       id: dishId, name, price, category_id: resolvedCategory?.id || null,
       category: resolvedCategory?.name || null,
       image_url: imageResult.imageUrls[0] || null, images: imageResult.imageUrls,
-      ingredient_ids: ingredient_ids || [],
+      ingredient_ids: ingredientResult.ingredients.map((ingredient) => ingredient.ingredient_id),
+      ingredients: ingredientResult.ingredients,
     });
   } catch (err) {
     await conn.rollback();
@@ -159,7 +230,7 @@ async function update(req, res, next) {
   const conn = await pool.getConnection();
   try {
     const { id } = req.params;
-    const { name, description, price, category, category_id, image_url, image_urls, ingredient_ids } = req.body;
+    const { name, description, price, category, category_id, image_url, image_urls } = req.body;
 
     if (!name || price === undefined || price === null) {
       return res.status(400).json({ message: 'Thiếu name hoặc price.' });
@@ -173,13 +244,15 @@ async function update(req, res, next) {
     const resolvedCategory = categoryResult.category;
     const imageResult = resolveImageUrls(image_urls, image_url);
     if (imageResult.error) return res.status(400).json({ message: imageResult.error });
+    const ingredientResult = resolveIngredients(req.body, false);
+    if (ingredientResult.error) return res.status(400).json({ message: ingredientResult.error });
 
     await conn.beginTransaction();
 
     const result = await dishModel.update(conn, id, {
       name, description: description || null, price,
       categoryId: resolvedCategory?.id || null, categoryName: resolvedCategory?.name || null,
-      imageUrls: imageResult.imageUrls, ingredient_ids,
+      imageUrls: imageResult.imageUrls, ingredients: ingredientResult.ingredients,
     });
 
     if (result.matchedRows === 0) {
