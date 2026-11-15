@@ -123,6 +123,43 @@ at the counter. Cashiers confirm receipt with
 bill closed and the table released. Cashiers can see pending methods in
 `GET /api/bills/payable`.
 
+### Automatic bill payment confirmation with SePay
+
+Set `SEPAY_API_KEY` in the backend `.env` to the same API key configured in
+SePay's webhook authorization header. Configure SePay to send
+`POST https://<public-domain>/api/bills/sepay/webhook` with
+`Authorization: Apikey <SEPAY_API_KEY>`. This route is intentionally unauthenticated
+by JWT; the API key is checked using a constant-time comparison.
+
+For incoming transfers, the webhook handles both bill codes (`BILL{id}`) and
+reservation deposit codes (`COC{id}`). Bill payments are confirmed only when
+the bill is still open, its payment method is online, and the transfer covers
+the amount due. Reservation deposits are confirmed only while the deposit is
+pending and its table hold is still valid. Deposit QR codes use the stored
+`deposits.transaction_code`; configure SePay's payment-code prefix filter to
+include both `BILL` and `COC`.
+
+The existing bill payment transaction and shared reservation deposit
+confirmation transaction handle state changes. Duplicate notifications are
+acknowledged without confirming twice. Service and cashier screens are notified
+over `service:bill-paid`, `cashier:bill-paid`, and `cashier:deposit-confirmed`.
+Cashiers are alerted through `cashier:deposit-late-payment` if a transfer arrives
+after a hold expires or its deposit can no longer be confirmed. Manual bill and
+deposit confirmation remain available as fallbacks. Underpayments are ignored,
+not accumulated; deposit overpayments are logged for manual reconciliation.
+
+On an existing database, run `database/v20_bill_payment_code_index_migration.sql`
+and `database/v21_deposit_transaction_code_index_migration.sql` once to add the
+bill/deposit lookup indexes. The existing database's `bills.paid_by` and
+`deposits.confirmed_by` columns allow `NULL`, so no nullability migration is
+needed for webhook-confirmed payments.
+
+Cashiers can review paid bill transactions in the frontend's **Lịch sử giao dịch**
+page. The cashier-only `GET /api/finance/payment-history` endpoint supports date,
+payment-method, and bill/table/payment-code search filters, and
+`GET /api/finance/payment-history/:billId` returns the paid bill details. This is
+bill-level payment history; the bank/SePay transaction reference is not stored.
+
 ### Chạy script tạo bill mô phỏng
 
 Làm lần lượt theo hướng dẫn này. Có hai cửa sổ Terminal: **Terminal 1 chạy
@@ -496,8 +533,10 @@ Reservations cannot be cancelled by the customer or service staff after a
 preorder has been added to a bill and sent to the kitchen. Eligible refund
 requests appear in the manager-only `/pending-refunds` page. Managers transfer
 the money outside the system, then confirm the refund there; the system records
-the manager and completion time. The manager finance page includes completed
-refunds and forfeited deposits in its deposit income/expense ledger.
+the manager and completion time. The manager finance page lists received
+deposits, completed refunds, and forfeited deposits. Its net cash flow is bill
+collections plus deposits received minus refunds; forfeitures classify deposits
+already counted as received and are not added a second time.
 
 - `PATCH /api/reservations/:id/cancel` — customer cancellation; refundable
   cancellations include `refund_bank_code`, `refund_account_number`, and
@@ -512,8 +551,9 @@ refunds and forfeited deposits in its deposit income/expense ledger.
 - `GET /api/reservations/pending-refunds` and
   `PATCH /api/reservations/:id/confirm-refund` — manager refund queue and
   confirmation after the manual bank transfer.
-- `GET /api/finance/deposits?from=YYYY-MM-DD&to=YYYY-MM-DD` — completed refund
-  and forfeited-deposit entries for the manager finance report.
+- `GET /api/finance/deposits?from=YYYY-MM-DD&to=YYYY-MM-DD` — deposit receipts,
+  completed refunds, and forfeitures for the manager finance report; accepts
+  optional `table_id`, `cashier_id`, and `payment_method` filters.
 - `GET /api/finance/top-dishes?period=day|week|month|three_months|all` —
   manager-only ranking by quantity in paid bills; defaults to `all`.
 

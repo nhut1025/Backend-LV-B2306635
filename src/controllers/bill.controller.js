@@ -1,7 +1,41 @@
+const crypto = require('crypto');
 const billModel = require('../models/bill.model');
+const reservationModel = require('../models/reservation.model');
 const { emitToRoom } = require('../utils/socket');
 const { getBankConfig } = require('../utils/settings');
 const { buildVietQrUrl } = require('../utils/vietqr');
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+function getLateDepositReason(deposit) {
+  if (deposit.deposit_status !== 'cho_thanh_toan') return 'deposit_not_pending';
+  if (deposit.reservation_status !== 'giu_tam') return 'reservation_not_held';
+  if (Number(deposit.held_table_count) < 1 || Number(deposit.invalid_held_table_count) > 0) {
+    return 'hold_expired_or_invalid';
+  }
+  return null;
+}
+
+function notifyLateDepositPayment(deposit, transferAmount, reason) {
+  const payload = {
+    deposit_id: Number(deposit.deposit_id),
+    reservation_id: Number(deposit.reservation_id),
+    transaction_code: deposit.transaction_code,
+    transfer_amount: Number(transferAmount),
+    deposit_amount: Number(deposit.amount),
+    reason,
+  };
+  console.warn(
+    `SePay: ${deposit.transaction_code} đã nhận tiền nhưng không thể tự xác nhận cọc (${reason})`,
+    payload.transfer_amount,
+    payload.deposit_amount
+  );
+  emitToRoom('thu_ngan', 'cashier:deposit-late-payment', payload);
+}
 
 // GET /api/bills/table/:tableId — phuc_vu mở bill của 1 bàn (tự tạo nếu chưa có)
 async function getByTable(req, res, next) {
@@ -437,6 +471,102 @@ async function payBill(req, res, next) {
   }
 }
 
+async function sepayWebhook(req, res) {
+  try {
+    const auth = req.headers.authorization || '';
+    if (!process.env.SEPAY_API_KEY
+      || !safeEqual(auth, `Apikey ${process.env.SEPAY_API_KEY}`)) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const { transferType, transferAmount, content, code } = req.body || {};
+    if (transferType !== 'in') return res.json({ success: true });
+
+    const codeMatch = String(code || '').match(/\b(?:BILL|COC)\d+\b/i)?.[0];
+    const contentMatch = String(content || '').match(/\b(?:BILL|COC)\d+\b/i)?.[0];
+    const paymentCode = (codeMatch || contentMatch || '').toUpperCase();
+    if (!/^(?:BILL|COC)\d+$/.test(paymentCode)) return res.json({ success: true });
+
+    if (paymentCode.startsWith('COC')) {
+      const deposit = await reservationModel.findDepositPaymentByTransactionCode(paymentCode);
+      if (!deposit || deposit.deposit_status === 'da_coc') {
+        return res.json({ success: true });
+      }
+
+      const amount = Number(transferAmount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        console.warn(`SePay: ${paymentCode} có số tiền cọc không hợp lệ`, transferAmount);
+        return res.json({ success: true });
+      }
+
+      const lateReason = getLateDepositReason(deposit);
+      if (lateReason) {
+        notifyLateDepositPayment(deposit, amount, lateReason);
+        return res.json({ success: true });
+      }
+
+      if (amount < Number(deposit.amount)) {
+        console.warn(`SePay: ${paymentCode} chuyển thiếu`, amount, Number(deposit.amount));
+        return res.json({ success: true });
+      }
+      if (amount > Number(deposit.amount)) {
+        console.warn(
+          `SePay: ${paymentCode} chuyển thừa`,
+          amount - Number(deposit.amount),
+          'cần đối soát hoàn tiền'
+        );
+      }
+
+      try {
+        const result = await reservationModel.confirmDepositPayment(deposit.deposit_id, null);
+        emitToRoom('thu_ngan', 'cashier:deposit-confirmed', result);
+      } catch (err) {
+        if (err.status !== 409) throw err;
+        const currentDeposit = await reservationModel.findDepositPaymentByTransactionCode(paymentCode);
+        if (currentDeposit?.deposit_status === 'da_coc') {
+          return res.json({ success: true });
+        }
+        if (currentDeposit) {
+          const currentLateReason = getLateDepositReason(currentDeposit);
+          if (currentLateReason) {
+            notifyLateDepositPayment(currentDeposit, amount, currentLateReason);
+          } else {
+            console.warn(`SePay: ${paymentCode} cọc thay đổi đồng thời; bỏ qua xác nhận lặp`);
+          }
+        }
+      }
+      return res.json({ success: true });
+    }
+
+    const bill = await billModel.findBillByPaymentCode(paymentCode);
+    if (!bill || bill.status !== 'mo' || bill.payment_method !== 'online') {
+      return res.json({ success: true });
+    }
+
+    const data = await billModel.getPaymentSummary(bill.id);
+    const amount = Number(transferAmount);
+    if (!Number.isFinite(amount) || amount < data.summary.amount_due) {
+      console.warn(`SePay: ${paymentCode} chuyển thiếu hoặc số tiền không hợp lệ`,
+        transferAmount, data.summary.amount_due);
+      return res.json({ success: true });
+    }
+
+    try {
+      const result = await billModel.payBill(bill.id, 'online', null);
+      emitToRoom('phuc_vu', 'service:bill-paid', result);
+      emitToRoom('thu_ngan', 'cashier:bill-paid', result);
+    } catch (err) {
+      if (err.status !== 409) throw err;
+      const currentBill = await billModel.findBillByPaymentCode(paymentCode);
+      if (!currentBill || currentBill.status === 'mo') throw err;
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('SePay webhook error:', err);
+    return res.status(500).json({ success: false });
+  }
+}
+
 module.exports = {
   getByTable,
   listMyHistory,
@@ -456,4 +586,5 @@ module.exports = {
   getPaymentQr,
   requestPayment,
   payBill,
+  sepayWebhook,
 };

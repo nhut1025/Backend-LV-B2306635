@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS deposits (
   amount DECIMAL(10,2) NOT NULL DEFAULT 50000,
   status ENUM('cho_thanh_toan','da_coc','dang_hoan','da_hoan','hoan_that_bai','mat_coc','da_tru_bill','da_huy') NOT NULL DEFAULT 'cho_thanh_toan',
   transaction_code VARCHAR(100) NULL,
+  INDEX idx_deposits_transaction_code (transaction_code),
   refund_bank_code VARCHAR(20) NULL,
   refund_account_number VARCHAR(50) NULL,
   refund_account_name VARCHAR(100) NULL,
@@ -258,6 +259,18 @@ CREATE TABLE IF NOT EXISTS deposits (
   FOREIGN KEY (confirmed_by) REFERENCES users(id),
   FOREIGN KEY (refunded_by) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+SET @idx_exists = (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'deposits'
+    AND INDEX_NAME = 'idx_deposits_transaction_code'
+);
+SET @sql = IF(@idx_exists = 0,
+  'CREATE INDEX idx_deposits_transaction_code ON deposits(transaction_code)',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- Nếu bảng deposits đã tồn tại từ trước (chưa có 3 cột thông tin hoàn tiền) -> vá lại
 SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'deposits' AND column_name = 'refund_bank_code');
@@ -331,10 +344,23 @@ CREATE TABLE IF NOT EXISTS bills (
   paid_by INT UNSIGNED NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   paid_at DATETIME NULL,
+  INDEX idx_bills_payment_code (payment_code),
   FOREIGN KEY (table_id) REFERENCES restaurant_tables(id),
   FOREIGN KEY (reservation_id) REFERENCES reservations(id),
   FOREIGN KEY (deposit_id) REFERENCES deposits(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+SET @idx_exists = (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'bills'
+    AND INDEX_NAME = 'idx_bills_payment_code'
+);
+SET @sql = IF(@idx_exists = 0,
+  'CREATE INDEX idx_bills_payment_code ON bills(payment_code)',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 CREATE TABLE IF NOT EXISTS table_transfers (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

@@ -939,6 +939,25 @@ async function findDepositByReservationId(reservationId, userId) {
   return rows;
 }
 
+async function findDepositPaymentByTransactionCode(transactionCode) {
+  const [rows] = await pool.query(
+    `SELECT d.id AS deposit_id, d.reservation_id, d.amount,
+            d.transaction_code, d.status AS deposit_status, r.status AS reservation_status,
+            (SELECT COUNT(*) FROM restaurant_tables t
+             WHERE t.current_reservation_id = r.id) AS held_table_count,
+            (SELECT COUNT(*) FROM restaurant_tables t
+             WHERE t.current_reservation_id = r.id
+               AND (t.status <> 'giu_tam' OR t.locked_until IS NULL OR t.locked_until < NOW()))
+              AS invalid_held_table_count
+     FROM deposits d
+     JOIN reservations r ON r.id = d.reservation_id
+     WHERE d.transaction_code = ?
+     LIMIT 1`,
+    [transactionCode]
+  );
+  return rows[0] || null;
+}
+
 async function findPendingDeposits() {
   const [rows] = await pool.query(
     `SELECT d.id AS deposit_id, d.reservation_id, d.amount, d.transaction_code, d.status,
@@ -1009,14 +1028,15 @@ async function confirmRefund(reservationId, managerId) {
   }
 }
 
-async function confirmDeposit(reservationId, cashierId) {
+async function confirmDepositPayment(depositId, confirmedBy) {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
 
     const [depositRows] = await conn.query(
-      `SELECT id, status FROM deposits WHERE reservation_id = ? FOR UPDATE`,
-      [reservationId]
+      `SELECT id, reservation_id, amount, transaction_code, status
+       FROM deposits WHERE id = ? FOR UPDATE`,
+      [depositId]
     );
     if (depositRows.length === 0) {
       const err = new Error('Không tìm thấy cọc cho đơn đặt bàn này.');
@@ -1028,6 +1048,8 @@ async function confirmDeposit(reservationId, cashierId) {
       err.status = 409;
       throw err;
     }
+    const deposit = depositRows[0];
+    const reservationId = deposit.reservation_id;
 
     const [reservationRows] = await conn.query(
       `SELECT id, status FROM reservations WHERE id = ? FOR UPDATE`,
@@ -1039,9 +1061,28 @@ async function confirmDeposit(reservationId, cashierId) {
       throw err;
     }
 
-      await conn.query(
-      `UPDATE deposits SET status = 'da_coc', paid_at = NOW(), confirmed_by = ? WHERE reservation_id = ?`,
-      [cashierId, reservationId]
+    const [tableRows] = await conn.query(
+      `SELECT id, status, locked_until < NOW() AS is_expired
+       FROM restaurant_tables WHERE current_reservation_id = ? FOR UPDATE`,
+      [reservationId]
+    );
+    const holdIsActive = tableRows.length > 0 && tableRows.every(
+      (table) => table.status === 'giu_tam'
+        && table.locked_until !== null
+        && !Number(table.is_expired)
+    );
+    if (!holdIsActive) {
+      const err = new Error('Lượt giữ bàn đã hết hạn hoặc không còn hợp lệ.');
+      err.status = 409;
+      err.code = tableRows.some((table) => Number(table.is_expired))
+        ? 'DEPOSIT_HOLD_EXPIRED'
+        : 'DEPOSIT_HOLD_INVALID';
+      throw err;
+    }
+
+    await conn.query(
+      `UPDATE deposits SET status = 'da_coc', paid_at = NOW(), confirmed_by = ? WHERE id = ?`,
+      [confirmedBy, depositId]
     );
 
     await conn.query(
@@ -1057,12 +1098,31 @@ async function confirmDeposit(reservationId, cashierId) {
     );
 
     await conn.commit();
+    return {
+      deposit_id: Number(depositId),
+      reservation_id: Number(reservationId),
+      transaction_code: deposit.transaction_code,
+      amount: Number(deposit.amount),
+    };
   } catch (err) {
     await conn.rollback();
     throw err;
   } finally {
     conn.release();
   }
+}
+
+async function confirmDeposit(reservationId, cashierId) {
+  const [depositRows] = await pool.query(
+    `SELECT id FROM deposits WHERE reservation_id = ? LIMIT 1`,
+    [reservationId]
+  );
+  if (depositRows.length === 0) {
+    const err = new Error('Không tìm thấy cọc cho đơn đặt bàn này.');
+    err.status = 404;
+    throw err;
+  }
+  return confirmDepositPayment(depositRows[0].id, cashierId);
 }
 
 module.exports = {
@@ -1078,10 +1138,12 @@ module.exports = {
   findExpiredHeldReservationIds,
   releaseExpiredReservation,
   findDepositByReservationId,
+  findDepositPaymentByTransactionCode,
   findPendingDeposits,
   findPendingRefunds,
   confirmRefund,
   confirmDeposit,
+  confirmDepositPayment,
   findUpcomingReservations,
   findRecoverableStaffCancellations,
   confirmArrival,

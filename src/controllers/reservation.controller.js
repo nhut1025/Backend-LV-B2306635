@@ -363,7 +363,8 @@ async function listPendingDeposits(req, res, next) {
 async function confirmDeposit(req, res, next) {
   try {
     const { id } = req.params;
-        await reservationModel.confirmDeposit(id, req.user.id);
+    const result = await reservationModel.confirmDeposit(id, req.user.id);
+    emitToRoom('thu_ngan', 'cashier:deposit-confirmed', result);
     res.json({ message: 'Đã xác nhận nhận cọc. Bàn chuyển sang trạng thái đã đặt.' });
   } catch (err) {
     next(err);

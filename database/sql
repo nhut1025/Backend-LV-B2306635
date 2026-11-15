@@ -151,6 +151,7 @@ CREATE TABLE deposits (
   amount DECIMAL(10,2) NOT NULL DEFAULT 50000,
   status ENUM('cho_thanh_toan','da_coc','dang_hoan','da_hoan','hoan_that_bai','mat_coc','da_tru_bill','da_huy') NOT NULL DEFAULT 'cho_thanh_toan',
   transaction_code VARCHAR(100) NULL,
+  INDEX idx_deposits_transaction_code (transaction_code),
   refund_bank_code VARCHAR(20) NULL,
   refund_account_number VARCHAR(50) NULL,
   refund_account_name VARCHAR(100) NULL,
@@ -180,6 +181,7 @@ CREATE TABLE bills (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   paid_at DATETIME NULL,
   INDEX idx_bills_status (status),
+  INDEX idx_bills_payment_code (payment_code),
   FOREIGN KEY (table_id) REFERENCES restaurant_tables(id),
   FOREIGN KEY (reservation_id) REFERENCES reservations(id),
   FOREIGN KEY (deposit_id) REFERENCES deposits(id)

@@ -823,6 +823,14 @@ async function requestPayment(billId, paymentMethod) {
   }
 }
 
+async function findBillByPaymentCode(paymentCode) {
+  const [rows] = await pool.query(
+    `SELECT id, status, payment_method FROM bills WHERE payment_code = ? LIMIT 1`,
+    [paymentCode]
+  );
+  return rows[0] || null;
+}
+
 // Danh sách bill đang mở có ít nhất 1 món — thu_ngan xem để biết bàn nào cần thanh toán.
 async function listPayableBills() {
   const [rows] = await pool.query(
@@ -961,6 +969,7 @@ async function payBill(billId, paymentMethod, cashierId) {
     return {
       bill_id: Number(billId),
       table_id: bill.table_id,
+      table_number: bill.table_number,
       total: summary.subtotal,
       deposit_amount: summary.deposit_amount,
       amount_due: summary.amount_due,
@@ -991,6 +1000,7 @@ module.exports = {
   findQueueItemById,
   getPaymentSummary,
   requestPayment,
+  findBillByPaymentCode,
   listPayableBills,
   payBill,
 };

@@ -72,6 +72,59 @@ async function listBills({ from, to, tableId, cashierId, paymentMethod }) {
   return rows.map(toBillRow);
 }
 
+async function listCashierPaymentHistory({ from, to, search, paymentMethod, limit, offset }) {
+  const conditions = [
+    "b.status = 'da_thanh_toan'",
+    'b.payment_method IS NOT NULL',
+  ];
+  const params = [];
+
+  if (from) {
+    conditions.push('COALESCE(b.paid_at, b.created_at) >= ?');
+    params.push(from);
+  }
+  if (to) {
+    conditions.push('COALESCE(b.paid_at, b.created_at) < DATE_ADD(?, INTERVAL 1 DAY)');
+    params.push(to);
+  }
+  if (paymentMethod) {
+    conditions.push('b.payment_method = ?');
+    params.push(paymentMethod);
+  }
+  if (search) {
+    conditions.push(`(
+      CAST(b.id AS CHAR) LIKE ?
+      OR CAST(t.table_number AS CHAR) LIKE ?
+      OR COALESCE(b.payment_code, '') LIKE ?
+    )`);
+    const searchTerm = `%${search}%`;
+    params.push(searchTerm, searchTerm, searchTerm);
+  }
+
+  const [rows] = await pool.query(
+    `SELECT b.id AS bill_id, b.table_id, t.table_number, b.status, b.created_at, b.paid_at,
+            b.total_amount,
+            CASE WHEN d.status IN ('da_coc', 'da_tru_bill') THEN COALESCE(d.amount, 0) ELSE 0 END AS deposit_amount,
+            b.payment_method, b.payment_code,
+            b.paid_by AS cashier_id, u.full_name AS cashier_name,
+            (SELECT COUNT(*) FROM bill_items bi
+             WHERE bi.bill_id = b.id AND bi.deleted_at IS NULL) AS item_count
+     FROM bills b
+     JOIN restaurant_tables t ON t.id = b.table_id
+     LEFT JOIN deposits d ON d.id = b.deposit_id
+     LEFT JOIN users u ON u.id = b.paid_by
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY COALESCE(b.paid_at, b.created_at) DESC, b.id DESC
+     LIMIT ? OFFSET ?`,
+    [...params, limit + 1, offset]
+  );
+
+  return {
+    bills: rows.slice(0, limit).map(toBillRow),
+    has_more: rows.length > limit,
+  };
+}
+
 // Dòng tổng cho đúng tập bill đang lọc.
 function summarize(bills) {
   return bills.reduce(
@@ -137,7 +190,7 @@ async function listTopSellingDishes(period = 'all') {
   };
 }
 
-async function listDepositTransactions({ from, to }) {
+async function listDepositTransactions({ from, to, tableId, cashierId, paymentMethod }) {
   const conditions = [];
   const params = [];
   if (from) {
@@ -148,18 +201,41 @@ async function listDepositTransactions({ from, to }) {
     conditions.push('transaction_at < DATE_ADD(?, INTERVAL 1 DAY)');
     params.push(to);
   }
+  if (tableId) {
+    conditions.push(`EXISTS (
+      SELECT 1 FROM reservation_tables rt
+      WHERE rt.reservation_id = deposit_transactions.reservation_id AND rt.table_id = ?
+    )`);
+    params.push(tableId);
+  }
+  if (cashierId) {
+    conditions.push('handled_by_id = ?');
+    params.push(cashierId);
+  }
+  if (paymentMethod === 'tien_mat') {
+    conditions.push('1 = 0');
+  }
 
   const [rows] = await pool.query(
     `SELECT transaction_type, reservation_id, amount, transaction_at, handled_by_name
      FROM (
+       SELECT 'received' AS transaction_type, d.reservation_id, d.amount,
+              d.paid_at AS transaction_at, d.confirmed_by AS handled_by_id,
+              COALESCE(u.full_name, 'SePay tự động') AS handled_by_name
+       FROM deposits d
+       LEFT JOIN users u ON u.id = d.confirmed_by
+       WHERE d.paid_at IS NOT NULL
+       UNION ALL
        SELECT 'refund' AS transaction_type, d.reservation_id, d.amount,
-              d.refunded_at AS transaction_at, u.full_name AS handled_by_name
+              d.refunded_at AS transaction_at, d.refunded_by AS handled_by_id,
+              u.full_name AS handled_by_name
        FROM deposits d
        LEFT JOIN users u ON u.id = d.refunded_by
        WHERE d.status = 'da_hoan' AND d.refunded_at IS NOT NULL
        UNION ALL
        SELECT 'forfeited' AS transaction_type, d.reservation_id, d.amount,
-              d.forfeited_at AS transaction_at, NULL AS handled_by_name
+              d.forfeited_at AS transaction_at, NULL AS handled_by_id,
+              NULL AS handled_by_name
        FROM deposits d
        WHERE d.status = 'mat_coc' AND d.forfeited_at IS NOT NULL
      ) AS deposit_transactions
@@ -172,15 +248,16 @@ async function listDepositTransactions({ from, to }) {
     amount: Number(row.amount),
   }));
   const totals = transactions.reduce((result, row) => {
+    if (row.transaction_type === 'received') result.received_amount += row.amount;
     if (row.transaction_type === 'refund') result.refunded_amount += row.amount;
     if (row.transaction_type === 'forfeited') result.forfeited_amount += row.amount;
     return result;
-  }, { refunded_amount: 0, forfeited_amount: 0 });
+  }, { received_amount: 0, refunded_amount: 0, forfeited_amount: 0 });
   return { transactions, totals };
 }
 
 // Chi tiết một bill bất kỳ: thông tin tiền + người xác nhận + các món.
-async function findBillDetail(billId) {
+async function findBillDetail(billId, paidOnly = false) {
   const [billRows] = await pool.query(
     `SELECT b.id AS bill_id, b.table_id, t.table_number, b.reservation_id, b.created_at, b.paid_at,
             b.status, b.total_amount,
@@ -194,7 +271,7 @@ async function findBillDetail(billId) {
      LEFT JOIN deposits d ON d.id = b.deposit_id
        OR (b.deposit_id IS NULL AND d.reservation_id = b.reservation_id AND d.status = 'da_coc')
      LEFT JOIN users du ON du.id = d.confirmed_by
-     WHERE b.id = ?`,
+     WHERE b.id = ? ${paidOnly ? "AND b.status = 'da_thanh_toan' AND b.payment_method IS NOT NULL" : ''}`,
     [billId]
   );
   if (billRows.length === 0) return null;
@@ -248,10 +325,16 @@ async function findBillDetail(billId) {
   };
 }
 
+async function findCashierPaymentHistoryDetail(billId) {
+  return findBillDetail(billId, true);
+}
+
 module.exports = {
   listBills,
+  listCashierPaymentHistory,
   summarize,
   listTopSellingDishes,
   listDepositTransactions,
   findBillDetail,
+  findCashierPaymentHistoryDetail,
 };

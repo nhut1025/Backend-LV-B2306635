@@ -44,6 +44,59 @@ async function listBills(req, res, next) {
   }
 }
 
+async function listCashierPaymentHistory(req, res, next) {
+  const { from, to, payment_method: paymentMethod } = req.query;
+  const search = String(req.query.search || '').trim();
+  const page = req.query.page === undefined ? 1 : Number(req.query.page);
+  const perPage = 30;
+
+  if ((from && !DATE_PATTERN.test(from)) || (to && !DATE_PATTERN.test(to))) {
+    return res.status(400).json({ message: 'from/to phải có dạng YYYY-MM-DD.' });
+  }
+  if (from && to && from > to) {
+    return res.status(400).json({ message: 'Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.' });
+  }
+  if (paymentMethod && !['tien_mat', 'online'].includes(paymentMethod)) {
+    return res.status(400).json({ message: 'payment_method phải là "tien_mat" hoặc "online".' });
+  }
+  if (search.length > 100) {
+    return res.status(400).json({ message: 'Từ khóa tìm kiếm không được vượt quá 100 ký tự.' });
+  }
+  if (!Number.isSafeInteger(page) || page < 1 || page > 1000000) {
+    return res.status(400).json({ message: 'page phải là số nguyên dương hợp lệ.' });
+  }
+
+  try {
+    const result = await financeModel.listCashierPaymentHistory({
+      from,
+      to,
+      search,
+      paymentMethod,
+      limit: perPage,
+      offset: (page - 1) * perPage,
+    });
+    res.json({ ...result, page, per_page: perPage });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getCashierPaymentHistoryDetail(req, res, next) {
+  const billId = Number(req.params.billId);
+  if (!Number.isSafeInteger(billId) || billId < 1) {
+    return res.status(400).json({ message: 'billId phải là số nguyên dương.' });
+  }
+  try {
+    const data = await financeModel.findCashierPaymentHistoryDetail(billId);
+    if (!data) {
+      return res.status(404).json({ message: 'Không tìm thấy giao dịch đã thanh toán.' });
+    }
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function listTopSellingDishes(req, res, next) {
   const period = req.query.period === undefined ? 'all' : String(req.query.period);
   if (!['day', 'week', 'month', 'three_months', 'all'].includes(period)) {
@@ -74,14 +127,30 @@ async function getBillDetail(req, res, next) {
 
 async function listDepositTransactions(req, res, next) {
   try {
-    const { from, to } = req.query;
+    const { from, to, payment_method: paymentMethod } = req.query;
     if ((from && !DATE_PATTERN.test(from)) || (to && !DATE_PATTERN.test(to))) {
       return res.status(400).json({ message: 'from/to phải có dạng YYYY-MM-DD.' });
     }
     if (from && to && from > to) {
       return res.status(400).json({ message: 'Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.' });
     }
-    const result = await financeModel.listDepositTransactions({ from, to });
+    if (paymentMethod && !['tien_mat', 'online'].includes(paymentMethod)) {
+      return res.status(400).json({ message: 'payment_method phải là "tien_mat" hoặc "online".' });
+    }
+
+    const table = parseId(req.query.table_id);
+    const cashier = parseId(req.query.cashier_id);
+    if (table.invalid || cashier.invalid) {
+      return res.status(400).json({ message: 'table_id/cashier_id phải là số nguyên dương.' });
+    }
+
+    const result = await financeModel.listDepositTransactions({
+      from,
+      to,
+      tableId: table.value,
+      cashierId: cashier.value,
+      paymentMethod,
+    });
     res.json(result);
   } catch (err) {
     next(err);
@@ -90,6 +159,8 @@ async function listDepositTransactions(req, res, next) {
 
 module.exports = {
   listBills,
+  listCashierPaymentHistory,
+  getCashierPaymentHistoryDetail,
   listTopSellingDishes,
   getBillDetail,
   listDepositTransactions,
