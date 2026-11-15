@@ -546,6 +546,42 @@ async function findKitchenQueue() {
   return rows;
 }
 
+async function findKitchenHistory({ tableNumber, limit, offset }) {
+  const joins = `FROM bill_items bi
+     JOIN dishes d ON d.id = bi.dish_id
+     JOIN bills b ON b.id = bi.bill_id
+     JOIN restaurant_tables t ON t.id = b.table_id`;
+  const conditions = [
+    `bi.deleted_at IS NULL`,
+    `bi.accepted_by_name IS NOT NULL`,
+    `TRIM(bi.accepted_by_name) <> ''`,
+    `bi.status IN ('san_sang', 'da_phuc_vu')`,
+  ];
+  const params = [];
+  if (tableNumber) {
+    conditions.push('t.table_number = ?');
+    params.push(tableNumber);
+  }
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  const [countRows] = await pool.query(
+    `SELECT COUNT(*) AS total ${joins} ${where}`,
+    params
+  );
+  const [rows] = await pool.query(
+    `SELECT bi.id, bi.bill_id, bi.dish_id, d.name AS dish_name, bi.quantity,
+            bi.status, bi.note, bi.accepted_by_name, bi.created_at, bi.ready_at,
+            t.table_number
+     ${joins}
+     ${where}
+     ORDER BY COALESCE(bi.ready_at, bi.created_at) DESC, bi.id DESC
+     LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+
+  return { items: rows, total: Number(countRows[0].total) };
+}
+
 // Món đã nấu xong (san_sang), chờ phuc_vu mang ra bàn
 async function findReadyItems() {
   const [rows] = await pool.query(
@@ -606,6 +642,11 @@ async function advanceItemStatus(itemId, userId, expectedStatus) {
          SET status = ?, accepted_by = ?, accepted_by_name = ?
          WHERE id = ?`,
         [nextStatus, userId, users[0].full_name, itemId]
+      );
+    } else if (nextStatus === 'san_sang') {
+      await conn.query(
+        `UPDATE bill_items SET status = ?, ready_at = NOW() WHERE id = ?`,
+        [nextStatus, itemId]
       );
     } else {
       await conn.query(`UPDATE bill_items SET status = ? WHERE id = ?`, [nextStatus, itemId]);
@@ -943,6 +984,7 @@ module.exports = {
   addItem,
   removeItem,
   findKitchenQueue,
+  findKitchenHistory,
   findReadyItems,
   advanceItemStatus,
   markItemServed,

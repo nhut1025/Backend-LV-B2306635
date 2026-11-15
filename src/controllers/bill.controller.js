@@ -227,6 +227,45 @@ async function kitchenQueue(req, res, next) {
   }
 }
 
+async function kitchenHistory(req, res, next) {
+  try {
+    const rawTableNumber = req.query.table_number;
+    if (
+      rawTableNumber !== undefined
+      && (typeof rawTableNumber !== 'string' || rawTableNumber.trim().length > 10)
+    ) {
+      return res.status(400).json({ message: 'Số bàn không hợp lệ.' });
+    }
+
+    const tableNumber = typeof rawTableNumber === 'string' ? rawTableNumber.trim() : '';
+    const rawPage = req.query.page === undefined ? '1' : String(req.query.page);
+    if (!/^[1-9]\d*$/.test(rawPage)) {
+      return res.status(400).json({ message: 'Số trang không hợp lệ.' });
+    }
+    const page = Number(rawPage);
+    const perPage = 50;
+    const offset = (page - 1) * perPage;
+    if (!Number.isSafeInteger(page) || !Number.isSafeInteger(offset) || offset > 10000000) {
+      return res.status(400).json({ message: 'Số trang vượt quá giới hạn.' });
+    }
+
+    const result = await billModel.findKitchenHistory({
+      tableNumber,
+      limit: perPage,
+      offset,
+    });
+    res.json({
+      history: result.items,
+      page,
+      per_page: perPage,
+      total_items: result.total,
+      total_pages: Math.ceil(result.total / perPage),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // GET /api/bills/ready-items — phuc_vu xem món đã nấu xong, chờ mang ra
 async function readyItems(req, res, next) {
   try {
@@ -408,6 +447,7 @@ module.exports = {
   addItem,
   removeItem,
   kitchenQueue,
+  kitchenHistory,
   readyItems,
   advanceItem,
   serveItem,

@@ -367,6 +367,7 @@ CREATE TABLE IF NOT EXISTS bill_items (
   status ENUM('cho_xac_nhan','dang_che_bien','san_sang','da_phuc_vu') NOT NULL DEFAULT 'cho_xac_nhan',
   accepted_by INT UNSIGNED NULL,
   accepted_by_name VARCHAR(120) NULL,
+  ready_at DATETIME NULL,
   note VARCHAR(255) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted_at DATETIME NULL,
@@ -408,6 +409,16 @@ SET @col_exists = (
 );
 SET @sql = IF(@col_exists = 0,
   'ALTER TABLE bill_items ADD COLUMN accepted_by_name VARCHAR(120) NULL AFTER accepted_by',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = DATABASE() AND table_name = 'bill_items' AND column_name = 'ready_at'
+);
+SET @sql = IF(@col_exists = 0,
+  'ALTER TABLE bill_items ADD COLUMN ready_at DATETIME NULL AFTER accepted_by_name',
   'SELECT 1'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

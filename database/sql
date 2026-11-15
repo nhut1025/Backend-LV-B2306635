@@ -211,11 +211,16 @@ CREATE TABLE bill_items (
   quantity INT NOT NULL,
   unit_price DECIMAL(10,2) NOT NULL,
   status ENUM('cho_xac_nhan','dang_che_bien','san_sang','da_phuc_vu') NOT NULL DEFAULT 'cho_xac_nhan',
+  accepted_by INT UNSIGNED NULL,
+  accepted_by_name VARCHAR(120) NULL,
+  ready_at DATETIME NULL,
   note VARCHAR(255) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted_at DATETIME NULL,
   FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE,
-  FOREIGN KEY (dish_id) REFERENCES dishes(id)
+  FOREIGN KEY (dish_id) REFERENCES dishes(id),
+  CONSTRAINT fk_bill_items_accepted_by
+    FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 16. BILL_REVIEWS

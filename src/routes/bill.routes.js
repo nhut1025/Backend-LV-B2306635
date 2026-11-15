@@ -13,6 +13,7 @@ router.get('/table/:tableId', authMiddleware, requireRole('phuc_vu'), ctrl.getBy
 router.post('/:billId/items', authMiddleware, requireRole('phuc_vu'), ctrl.addItem);
 router.delete('/:billId/items/:itemId', authMiddleware, requireRole('phuc_vu'), ctrl.removeItem);
 router.get('/kitchen-queue', authMiddleware, requireRole('kitchen'), ctrl.kitchenQueue);
+router.get('/kitchen-history', authMiddleware, requireRole('kitchen'), ctrl.kitchenHistory);
 router.get('/ready-items', authMiddleware, requireRole('phuc_vu'), ctrl.readyItems);
 router.patch('/items/:itemId/advance', authMiddleware, requireRole('kitchen'), ctrl.advanceItem);
 router.patch('/items/:itemId/serve', authMiddleware, requireRole('phuc_vu'), ctrl.serveItem);

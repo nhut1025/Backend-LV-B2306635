@@ -72,6 +72,13 @@ once. New installations include these columns in
 the bill item records their user ID and a name snapshot. The name is shown in
 the kitchen queue, ready-item list, active bill, and paid bill history.
 
+On an existing database, also run
+`database/v19_kitchen_cooking_history_migration.sql` once. New installations
+include `ready_at` in the bill item schema. The kitchen-only
+`GET /api/bills/kitchen-history` endpoint lists attributed items that are ready
+or served, supports exact table-number filtering and pagination, and records
+the time an item becomes ready.
+
 Only authenticated customers and cashiers can use `/api/chat`. Customers can
 list their own conversations and send/read messages; cashiers share the open
 inbox, claim a conversation by replying, take over an open conversation, and
