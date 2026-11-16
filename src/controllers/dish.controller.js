@@ -15,7 +15,20 @@ async function list(req, res, next) {
     }
 
     const [rows] = await dishModel.findAll(category, category_id, available_only === 'true');
+    const tagMap = await dishModel.findTagsForDishIds(rows.map((dish) => dish.id));
+    rows.forEach((dish) => {
+      dish.tags = tagMap[dish.id] || [];
+    });
     res.json({ dishes: rows });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listTags(req, res, next) {
+  try {
+    const rows = await dishModel.findAllTags();
+    res.json({ tags: rows });
   } catch (err) {
     next(err);
   }
@@ -116,12 +129,42 @@ function resolveIngredients(body, required) {
   return { ingredients };
 }
 
+function resolveTags(body) {
+  const hasTags = Object.prototype.hasOwnProperty.call(body, 'tags');
+  const hasLegacyTagIds = Object.prototype.hasOwnProperty.call(body, 'tag_ids');
+  if (hasTags && hasLegacyTagIds) {
+    return { error: 'Chỉ gửi một trong tags hoặc tag_ids.' };
+  }
+  if (!hasTags && !hasLegacyTagIds) {
+    return { tagIds: [] };
+  }
+
+  const rawTags = hasTags ? body.tags : body.tag_ids;
+  if (!Array.isArray(rawTags)) {
+    return { error: 'tags phải là một danh sách thẻ món ăn.' };
+  }
+
+  const tagIds = [];
+  const seen = new Set();
+  for (const tag of rawTags) {
+    const tagId = Number(tag);
+    if (!Number.isInteger(tagId) || tagId < 1) {
+      return { error: 'Mỗi thẻ món ăn phải có tag_id là số nguyên dương.' };
+    }
+    if (seen.has(tagId)) continue;
+    seen.add(tagId);
+    tagIds.push(tagId);
+  }
+
+  return { tagIds };
+}
+
 async function getById(req, res, next) {
   try {
     const { id } = req.params;
     const userId = req.user ? req.user.id : null;
 
-    const { dishResult, ingredientResult, imageResult } = await dishModel.findById(id);
+    const { dishResult, ingredientResult, imageResult, tagResult } = await dishModel.findById(id);
     const [dishRows] = dishResult;
     if (dishRows.length === 0) {
       return res.status(404).json({ message: 'Không tìm thấy món ăn.' });
@@ -130,6 +173,7 @@ async function getById(req, res, next) {
 
     const [ingredientRows] = ingredientResult;
     const [imageRows] = imageResult;
+    const [tagRows] = tagResult;
     const canViewIngredientQuantities = Boolean(
       req.user && ['manager', 'phuc_vu', 'thu_ngan', 'kitchen'].includes(req.user.role)
     );
@@ -140,6 +184,7 @@ async function getById(req, res, next) {
         quantity_g: ingredient.quantity_g == null ? null : Number(ingredient.quantity_g),
       }),
     }));
+    dish.tags = tagRows.map((tag) => ({ id: Number(tag.id), name: tag.name, slug: tag.slug }));
     dish.images = imageRows.map((image) => image.image_url);
     if (dish.images.length === 0 && dish.image_url) dish.images = [dish.image_url];
     dish.contains_excluded_ingredient = false;
@@ -200,6 +245,8 @@ async function create(req, res, next) {
     if (imageResult.error) return res.status(400).json({ message: imageResult.error });
     const ingredientResult = resolveIngredients(req.body, true);
     if (ingredientResult.error) return res.status(400).json({ message: ingredientResult.error });
+    const tagResult = resolveTags(req.body);
+    if (tagResult.error) return res.status(400).json({ message: tagResult.error });
 
     await conn.beginTransaction();
 
@@ -207,6 +254,7 @@ async function create(req, res, next) {
       name, description: description || null, price,
       categoryId: resolvedCategory?.id || null, categoryName: resolvedCategory?.name || null,
       imageUrls: imageResult.imageUrls, ingredients: ingredientResult.ingredients,
+      tagIds: tagResult.tagIds,
     });
     const dishId = result.insertId;
 
@@ -217,6 +265,7 @@ async function create(req, res, next) {
       image_url: imageResult.imageUrls[0] || null, images: imageResult.imageUrls,
       ingredient_ids: ingredientResult.ingredients.map((ingredient) => ingredient.ingredient_id),
       ingredients: ingredientResult.ingredients,
+      tag_ids: tagResult.tagIds,
     });
   } catch (err) {
     await conn.rollback();
@@ -246,6 +295,8 @@ async function update(req, res, next) {
     if (imageResult.error) return res.status(400).json({ message: imageResult.error });
     const ingredientResult = resolveIngredients(req.body, false);
     if (ingredientResult.error) return res.status(400).json({ message: ingredientResult.error });
+    const tagResult = resolveTags(req.body);
+    if (tagResult.error) return res.status(400).json({ message: tagResult.error });
 
     await conn.beginTransaction();
 
@@ -253,6 +304,7 @@ async function update(req, res, next) {
       name, description: description || null, price,
       categoryId: resolvedCategory?.id || null, categoryName: resolvedCategory?.name || null,
       imageUrls: imageResult.imageUrls, ingredients: ingredientResult.ingredients,
+      tagIds: tagResult.tagIds,
     });
 
     if (result.matchedRows === 0) {
@@ -308,6 +360,7 @@ async function remove(req, res, next) {
 
 module.exports = {
   list,
+  listTags,
   getById,
   getPublicReviews,
   uploadImage,

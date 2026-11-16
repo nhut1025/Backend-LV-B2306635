@@ -29,6 +29,32 @@ function findAll(category, categoryId, availableOnly) {
   return pool.query(sql, params);
 }
 
+async function findAllTags() {
+  const [rows] = await pool.query(
+    'SELECT id, name, slug, sort_order FROM dish_tags ORDER BY sort_order, name'
+  );
+  return rows;
+}
+
+async function findTagsForDishIds(dishIds) {
+  if (!dishIds.length) return {};
+  const [rows] = await pool.query(
+    `SELECT dtm.dish_id, dt.id, dt.name, dt.slug
+     FROM dish_tag_map dtm
+     JOIN dish_tags dt ON dt.id = dtm.tag_id
+     WHERE dtm.dish_id IN (?)
+     ORDER BY dt.sort_order, dt.name`,
+    [dishIds]
+  );
+
+  const grouped = {};
+  for (const row of rows) {
+    if (!grouped[row.dish_id]) grouped[row.dish_id] = [];
+    grouped[row.dish_id].push({ id: Number(row.id), name: row.name, slug: row.slug });
+  }
+  return grouped;
+}
+
 async function findById(id) {
   const dishResult = await pool.query(
     `SELECT d.id, d.name, d.description, d.price, d.category_id,
@@ -53,7 +79,15 @@ async function findById(id) {
      ORDER BY sort_order, id`,
     [id]
   );
-  return { dishResult, ingredientResult, imageResult };
+  const tagResult = await pool.query(
+    `SELECT dt.id, dt.name, dt.slug
+     FROM dish_tag_map dtm
+     JOIN dish_tags dt ON dt.id = dtm.tag_id
+     WHERE dtm.dish_id = ?
+     ORDER BY dt.sort_order, dt.name`,
+    [id]
+  );
+  return { dishResult, ingredientResult, imageResult, tagResult };
 }
 
 async function findPublicReviewsByDishId(dishId) {
@@ -135,6 +169,21 @@ async function syncIngredients(connection, dishId, ingredients) {
   }
 }
 
+async function syncTags(connection, dishId, tagIds) {
+  const normalizedIds = [...new Set(tagIds
+    .map((tagId) => Number(tagId))
+    .filter((tagId) => Number.isInteger(tagId) && tagId > 0))];
+
+  await connection.query('DELETE FROM dish_tag_map WHERE dish_id = ?', [dishId]);
+  if (normalizedIds.length > 0) {
+    const values = normalizedIds.map((tagId) => [dishId, tagId]);
+    await connection.query(
+      'INSERT INTO dish_tag_map (dish_id, tag_id) VALUES ?',
+      [values]
+    );
+  }
+}
+
 async function create(connection, dish) {
   const [result] = await connection.query(
     `INSERT INTO dishes (name, description, price, category, category_id, image_url)
@@ -146,6 +195,7 @@ async function create(connection, dish) {
   );
   await syncImages(connection, result.insertId, dish.imageUrls);
   await syncIngredients(connection, result.insertId, dish.ingredients);
+  if (Array.isArray(dish.tagIds)) await syncTags(connection, result.insertId, dish.tagIds);
   return result;
 }
 
@@ -165,6 +215,7 @@ async function update(connection, id, dish) {
   );
   await syncImages(connection, id, dish.imageUrls);
   if (Array.isArray(dish.ingredients)) await syncIngredients(connection, id, dish.ingredients);
+  if (Array.isArray(dish.tagIds)) await syncTags(connection, id, dish.tagIds);
   return { ...result, matchedRows: existingRows.length };
 }
 
@@ -179,9 +230,12 @@ async function remove(id) {
 module.exports = {
   findExcludedIngredientIds,
   findAll,
+  findAllTags,
+  findTagsForDishIds,
   findById,
   findPublicReviewsByDishId,
   syncImages,
+  syncTags,
   create,
   update,
   setAvailability,

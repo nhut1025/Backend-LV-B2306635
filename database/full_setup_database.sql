@@ -120,7 +120,26 @@ INSERT IGNORE INTO dish_categories (name) VALUES
   ('Tráng miệng'),
   ('Khác');
 
--- ============ 5. DISHES ============
+-- ============ 5. DISH TAGS ============
+CREATE TABLE IF NOT EXISTS dish_tags (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(120) NOT NULL UNIQUE,
+  slug VARCHAR(120) NOT NULL UNIQUE,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+INSERT IGNORE INTO dish_tags (name, slug, sort_order) VALUES
+  ('Chay', 'chay', 1),
+  ('Ăn kiêng', 'an-kieng', 2),
+  ('Nhiều đạm', 'nhieu-dam', 3),
+  ('Cay', 'cay', 4),
+  ('Chứa hải sản', 'chua-hai-san', 5),
+  ('Dinh dưỡng', 'dinh-duong', 6),
+  ('Giàu protein', 'giau-protein', 7);
+
+-- ============ 6. DISHES ============
 CREATE TABLE IF NOT EXISTS dishes (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(180) NOT NULL,
@@ -136,7 +155,15 @@ CREATE TABLE IF NOT EXISTS dishes (
   CONSTRAINT fk_dishes_category FOREIGN KEY (category_id) REFERENCES dish_categories(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- ============ 6. DISH_IMAGES ============
+CREATE TABLE IF NOT EXISTS dish_tag_map (
+  dish_id INT UNSIGNED NOT NULL,
+  tag_id INT UNSIGNED NOT NULL,
+  PRIMARY KEY (dish_id, tag_id),
+  FOREIGN KEY (dish_id) REFERENCES dishes(id) ON DELETE CASCADE,
+  FOREIGN KEY (tag_id) REFERENCES dish_tags(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ============ 7. DISH_IMAGES ============
 CREATE TABLE IF NOT EXISTS dish_images (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   dish_id INT UNSIGNED NOT NULL,
@@ -401,6 +428,17 @@ CREATE TABLE IF NOT EXISTS bill_items (
   FOREIGN KEY (dish_id) REFERENCES dishes(id),
   CONSTRAINT fk_bill_items_accepted_by
     FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 25. USER_PREFERRED_INGREDIENTS
+CREATE TABLE user_preferred_ingredients (
+  user_id INT UNSIGNED NOT NULL,
+  ingredient_id INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, ingredient_id),
+  INDEX idx_user_preferred_ingredient (ingredient_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Nếu bill_items đã tồn tại từ trước (chưa có cột status) -> bổ sung

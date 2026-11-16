@@ -51,6 +51,12 @@ type to the existing `dishes.id` type, including its signed/unsigned setting.
 - Dish create/update accepts `ingredients: [{ "ingredient_id": 1, "quantity_g": 150 }]`;
   use `null` for an ingredient without a measured amount. Legacy
   `ingredient_ids` requests remain supported.
+- Dish tags are managed separately from categories. Existing databases should run
+  `database/v22_dish_tags_migration.sql` once; new installations include the
+  `dish_tags` and `dish_tag_map` tables in `database/full_setup_database.sql`.
+  - `GET /api/dishes/tags` lists available dish tags.
+  - Dish create/update accepts `tag_ids: [1, 3, 5]` and the dishes API returns
+    each dish's `tags` array for use in the menu and detail page.
   - On an existing database, run `database/v11_phase8_refunds_migration.sql`
     once to add refund attribution, forfeiture timestamps, and the cancelled
     deposit status used by reservation cancellations.
