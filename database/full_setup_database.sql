@@ -1,8 +1,7 @@
 -- =====================================================================
--- FILE NÀY CHẠY ĐƯỢC NHIỀU LẦN MÀ KHÔNG LỖI, KHÔNG MẤT DỮ LIỆU.
--- Dùng cho cả 2 trường hợp: setup CSDL mới hoàn toàn, HOẶC bổ sung
--- cột/bảng còn thiếu vào CSDL đã có sẵn (như DB hiện tại của bạn).
--- Theo đúng: Tài liệu tổng hợp Website Quản lý & Đặt món Nhà hàng (v7)
+-- SCHEMA TỔNG HỢP HIỆN TẠI (v7 -> v23).
+-- Dùng file này để tạo database mới. Với database đang có dữ liệu,
+-- chỉ chạy các migration còn thiếu trong database/, không chạy file này.
 -- =====================================================================
 
 CREATE DATABASE IF NOT EXISTS quan_an_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -155,6 +154,57 @@ CREATE TABLE IF NOT EXISTS dishes (
   CONSTRAINT fk_dishes_category FOREIGN KEY (category_id) REFERENCES dish_categories(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+SET @col_exists = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'dishes'
+    AND column_name = 'category_id'
+);
+SET @sql = IF(@col_exists = 0,
+  'ALTER TABLE dishes ADD COLUMN category_id INT UNSIGNED NULL AFTER category',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @idx_exists = (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'dishes'
+    AND INDEX_NAME = 'idx_dishes_category_id'
+);
+SET @sql = IF(@idx_exists = 0,
+  'CREATE INDEX idx_dishes_category_id ON dishes(category_id)',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @fk_exists = (
+  SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'dishes'
+    AND COLUMN_NAME = 'category_id'
+    AND REFERENCED_TABLE_NAME = 'dish_categories'
+);
+SET @sql = IF(@fk_exists = 0,
+  'ALTER TABLE dishes ADD CONSTRAINT fk_dishes_category FOREIGN KEY (category_id) REFERENCES dish_categories(id) ON DELETE RESTRICT',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- Preserve legacy category names when upgrading a database with existing dishes.
+INSERT IGNORE INTO dish_categories (name)
+SELECT DISTINCT TRIM(category)
+FROM dishes
+WHERE category IS NOT NULL AND TRIM(category) <> '';
+
+UPDATE dishes d
+JOIN dish_categories c
+  ON c.name COLLATE utf8mb4_unicode_ci = TRIM(d.category) COLLATE utf8mb4_unicode_ci
+SET d.category_id = c.id
+WHERE d.category IS NOT NULL
+  AND TRIM(d.category) <> ''
+  AND d.category_id IS NULL;
+
 CREATE TABLE IF NOT EXISTS dish_tag_map (
   dish_id INT UNSIGNED NOT NULL,
   tag_id INT UNSIGNED NOT NULL,
@@ -164,16 +214,34 @@ CREATE TABLE IF NOT EXISTS dish_tag_map (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============ 7. DISH_IMAGES ============
-CREATE TABLE IF NOT EXISTS dish_images (
-  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  dish_id INT UNSIGNED NOT NULL,
-  image_url VARCHAR(500) NOT NULL,
-  sort_order SMALLINT UNSIGNED NOT NULL DEFAULT 0,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_dish_images_dish_url (dish_id, image_url),
-  INDEX idx_dish_images_dish_sort (dish_id, sort_order),
-  FOREIGN KEY (dish_id) REFERENCES dishes(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+SET @dish_id_type = (
+  SELECT COLUMN_TYPE
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'dishes'
+    AND COLUMN_NAME = 'id'
+);
+
+SET @create_dish_images_sql = CONCAT(
+  'CREATE TABLE IF NOT EXISTS dish_images (',
+  'id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, ',
+  'dish_id ', @dish_id_type, ' NOT NULL, ',
+  'image_url VARCHAR(500) NOT NULL, ',
+  'sort_order SMALLINT UNSIGNED NOT NULL DEFAULT 0, ',
+  'created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, ',
+  'UNIQUE KEY uq_dish_images_dish_url (dish_id, image_url), ',
+  'INDEX idx_dish_images_dish_sort (dish_id, sort_order), ',
+  'FOREIGN KEY (dish_id) REFERENCES dishes(id) ON DELETE CASCADE',
+  ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+);
+PREPARE create_dish_images_stmt FROM @create_dish_images_sql;
+EXECUTE create_dish_images_stmt;
+DEALLOCATE PREPARE create_dish_images_stmt;
+
+INSERT IGNORE INTO dish_images (dish_id, image_url, sort_order)
+SELECT id, image_url, 0
+FROM dishes
+WHERE image_url IS NOT NULL AND TRIM(image_url) <> '';
 
 -- ============ 7. DISH_INGREDIENTS ============
 CREATE TABLE IF NOT EXISTS dish_ingredients (
@@ -212,6 +280,7 @@ CREATE TABLE IF NOT EXISTS user_preferred_ingredients (
   ingredient_id INT UNSIGNED NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (user_id, ingredient_id),
+  INDEX idx_user_preferred_ingredient (ingredient_id),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -286,6 +355,33 @@ CREATE TABLE IF NOT EXISTS deposits (
   FOREIGN KEY (confirmed_by) REFERENCES users(id),
   FOREIGN KEY (refunded_by) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ============ CUSTOMER REFUND BANK ACCOUNTS ============
+SET @user_id_type = (
+  SELECT COLUMN_TYPE
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'users'
+    AND COLUMN_NAME = 'id'
+);
+
+SET @create_refund_bank_accounts_sql = CONCAT(
+  'CREATE TABLE IF NOT EXISTS user_refund_bank_accounts (',
+  'id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, ',
+  'user_id ', @user_id_type, ' NOT NULL, ',
+  'bank_code VARCHAR(20) NOT NULL, ',
+  'account_number VARCHAR(50) NOT NULL, ',
+  'account_name VARCHAR(100) NOT NULL, ',
+  'is_default BOOLEAN NOT NULL DEFAULT FALSE, ',
+  'created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, ',
+  'updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, ',
+  'INDEX idx_refund_bank_accounts_user_default (user_id, is_default), ',
+  'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE',
+  ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+);
+PREPARE create_refund_bank_accounts_stmt FROM @create_refund_bank_accounts_sql;
+EXECUTE create_refund_bank_accounts_stmt;
+DEALLOCATE PREPARE create_refund_bank_accounts_stmt;
 
 SET @idx_exists = (
   SELECT COUNT(*) FROM information_schema.STATISTICS
@@ -428,17 +524,6 @@ CREATE TABLE IF NOT EXISTS bill_items (
   FOREIGN KEY (dish_id) REFERENCES dishes(id),
   CONSTRAINT fk_bill_items_accepted_by
     FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- 25. USER_PREFERRED_INGREDIENTS
-CREATE TABLE user_preferred_ingredients (
-  user_id INT UNSIGNED NOT NULL,
-  ingredient_id INT UNSIGNED NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (user_id, ingredient_id),
-  INDEX idx_user_preferred_ingredient (ingredient_id),
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  FOREIGN KEY (ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Nếu bill_items đã tồn tại từ trước (chưa có cột status) -> bổ sung

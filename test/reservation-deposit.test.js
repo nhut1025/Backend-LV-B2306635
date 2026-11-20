@@ -123,6 +123,108 @@ test('looks up deposits using the stored transfer code', async () => {
   }
 });
 
+function createRefundCancellationConnection(accountRows) {
+  const calls = [];
+  let rolledBack = false;
+  let committed = false;
+  const connection = {
+    async beginTransaction() {},
+    async commit() { committed = true; },
+    async rollback() { rolledBack = true; },
+    release() {},
+    async query(sql, params = []) {
+      calls.push({ sql, params });
+      if (sql.includes('FROM deposits WHERE reservation_id = ? FOR UPDATE')) {
+        return [[{ id: 44, status: 'da_coc', amount: '50000' }], []];
+      }
+      if (sql.includes('FROM reservations WHERE id = ? FOR UPDATE')) {
+        return [[{
+          id: 15,
+          user_id: 10,
+          status: 'da_dat',
+          refund_eligible: 1,
+          late_cancel_eligible: 0,
+        }], []];
+      }
+      if (sql.includes('FROM user_refund_bank_accounts')) return [accountRows, []];
+      if (sql.includes('SELECT cancelled_at FROM reservations')) {
+        return [[{ cancelled_at: '2026-11-17 10:00:00' }], []];
+      }
+      if (sql.includes('FROM restaurant_tables WHERE current_reservation_id = ? FOR UPDATE')
+        || sql.includes('FROM reservation_preorders WHERE reservation_id = ? FOR UPDATE')) {
+        return [[], []];
+      }
+      return [{ affectedRows: 1 }, []];
+    },
+  };
+  return {
+    connection,
+    calls,
+    get rolledBack() { return rolledBack; },
+    get committed() { return committed; },
+  };
+}
+
+test('refund cancellation snapshots only the selected account owned by the customer', async () => {
+  const originalGetConnection = pool.getConnection;
+  const originalQuery = pool.query;
+  const state = createRefundCancellationConnection([{
+    bank_code: 'VCB',
+    account_number: '123456789',
+    account_name: 'NGUYEN VAN A',
+  }]);
+  pool.getConnection = async () => state.connection;
+  pool.query = async () => [[], []];
+
+  try {
+    const result = await reservationModel.cancelReservation(15, {
+      actor: 'customer',
+      userId: 10,
+      refundBankAccountId: '8',
+    });
+
+    assert.equal(result.depositStatus, 'dang_hoan');
+    assert.deepEqual(
+      state.calls.find(({ sql }) => sql.includes('FROM user_refund_bank_accounts')).params,
+      [8, 10]
+    );
+    assert.deepEqual(
+      state.calls.find(({ sql }) => sql.includes("SET status = 'dang_hoan'")).params,
+      ['VCB', '123456789', 'NGUYEN VAN A', 44]
+    );
+    assert.equal(state.committed, true);
+    assert.equal(state.rolledBack, false);
+  } finally {
+    pool.getConnection = originalGetConnection;
+    pool.query = originalQuery;
+  }
+});
+
+test('refund cancellation rejects an account that does not belong to the customer', async () => {
+  const originalGetConnection = pool.getConnection;
+  const originalQuery = pool.query;
+  const state = createRefundCancellationConnection([]);
+  pool.getConnection = async () => state.connection;
+  pool.query = async () => [[], []];
+
+  try {
+    await assert.rejects(
+      reservationModel.cancelReservation(15, {
+        actor: 'customer',
+        userId: 10,
+        refundBankAccountId: '8',
+      }),
+      (error) => error.status === 400 && error.message === 'Tài khoản nhận hoàn cọc không hợp lệ.'
+    );
+    assert.equal(state.calls.some(({ sql }) => sql.startsWith('UPDATE reservations')), false);
+    assert.equal(state.committed, false);
+    assert.equal(state.rolledBack, true);
+  } finally {
+    pool.getConnection = originalGetConnection;
+    pool.query = originalQuery;
+  }
+});
+
 test('manual deposit confirmation emits the same cashier refresh event', async () => {
   const result = {
     deposit_id: 27,

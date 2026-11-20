@@ -6,6 +6,7 @@ const multer = require('multer');
 const router = express.Router();
 
 const ctrl = require('../controllers/user.controller');
+const refundBankAccountCtrl = require('../controllers/refundBankAccount.controller');
 const { authMiddleware, requireRole } = require('../middlewares/auth.middleware');
 
 const uploadDirectory = path.join(__dirname, '../../uploads');
@@ -51,6 +52,10 @@ router.put('/staff/:id', authMiddleware, requireRole('manager'), ctrl.updateStaf
 router.patch('/staff/:id/active', authMiddleware, requireRole('manager'), ctrl.toggleStaffActive);
 router.get('/me', authMiddleware, ctrl.getProfile);
 router.put('/me', authMiddleware, ctrl.updateProfile);
+router.get('/me/refund-bank-accounts', authMiddleware, requireRole('customer'), refundBankAccountCtrl.listMine);
+router.post('/me/refund-bank-accounts', authMiddleware, requireRole('customer'), refundBankAccountCtrl.createMine);
+router.put('/me/refund-bank-accounts/:id', authMiddleware, requireRole('customer'), refundBankAccountCtrl.updateMine);
+router.delete('/me/refund-bank-accounts/:id', authMiddleware, requireRole('customer'), refundBankAccountCtrl.deleteMine);
 router.post('/me/avatar', authMiddleware, parseAvatarUpload, ctrl.uploadAvatar);
 router.put('/me/password', authMiddleware, ctrl.changePassword);
 router.get('/me/reservation-summary', authMiddleware, requireRole('customer'), ctrl.getReservationSummary);

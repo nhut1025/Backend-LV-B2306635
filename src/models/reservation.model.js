@@ -582,7 +582,7 @@ async function confirmArrival(reservationId) {
 }
 
 async function cancelReservation(reservationId, {
-  actor, userId, refundBankCode, refundAccountNumber, refundAccountName, acceptForfeiture,
+  actor, userId, refundBankAccountId, refundBankCode, refundAccountNumber, refundAccountName, acceptForfeiture,
 }) {
   const timing = await getReservationTiming();
 
@@ -677,9 +677,33 @@ async function cancelReservation(reservationId, {
 
       refundEligible = Boolean(Number(reservation.refund_eligible));
       if (refundEligible) {
-        const bankCode = typeof refundBankCode === 'string' ? refundBankCode.trim() : '';
-        const accountNumber = typeof refundAccountNumber === 'string' ? refundAccountNumber.trim() : '';
-        const accountName = typeof refundAccountName === 'string' ? refundAccountName.trim() : '';
+        let bankCode;
+        let accountNumber;
+        let accountName;
+        if (actor === 'customer') {
+          const accountId = Number(refundBankAccountId);
+          if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+            const err = new Error('Vui lòng chọn tài khoản nhận hoàn cọc.');
+            err.status = 400;
+            throw err;
+          }
+          const [accountRows] = await conn.query(
+            `SELECT bank_code, account_number, account_name
+             FROM user_refund_bank_accounts
+             WHERE id = ? AND user_id = ? FOR UPDATE`,
+            [accountId, userId]
+          );
+          if (accountRows.length === 0) {
+            const err = new Error('Tài khoản nhận hoàn cọc không hợp lệ.');
+            err.status = 400;
+            throw err;
+          }
+          ({ bank_code: bankCode, account_number: accountNumber, account_name: accountName } = accountRows[0]);
+        } else {
+          bankCode = typeof refundBankCode === 'string' ? refundBankCode.trim() : '';
+          accountNumber = typeof refundAccountNumber === 'string' ? refundAccountNumber.trim() : '';
+          accountName = typeof refundAccountName === 'string' ? refundAccountName.trim() : '';
+        }
         if (!bankCode || bankCode.length > 20 || !accountNumber || accountNumber.length > 50
           || !accountName || accountName.length > 100) {
           const err = new Error('Vui lòng nhập ngân hàng, số tài khoản và tên chủ tài khoản hợp lệ để nhận hoàn cọc.');

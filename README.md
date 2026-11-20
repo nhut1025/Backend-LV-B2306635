@@ -12,9 +12,13 @@ Set the database and JWT values in `.env` before starting the server.
 
 ## Database
 
-Run `database/schema.sql`, then `database/seed.sql` in MySQL. The seed creates
-the `settings` values used by table validation and a manager account.
-The seeded manager login is `dmn19102005@gmail.com` / `Nhut@1025`.
+For a new database, run `database/full_setup_database.sql` in MySQL. It creates
+the current schema and default category, tag, and settings rows. It does not
+create a manager account.
+
+For an existing database, keep its data and run only the required migration
+files from `database/` in version order. Do not run the full setup file against
+an existing database.
 
 ### Dish categories
 
@@ -22,6 +26,10 @@ On an existing database, run `database/v9_dish_categories_migration.sql` once
 before starting this version. It creates the managed category table and links
 existing dish category names without deleting their current values. New
 installations use the schema in `database/full_setup_database.sql`.
+
+On an existing database, run `database/v23_user_refund_bank_accounts_migration.sql`
+once to enable customers to save and select bank accounts for deposit refunds.
+New installations include the table in `database/full_setup_database.sql`.
 
 For multiple dish images, also run `database/v10_dish_images_migration.sql`
 once after the categories migration. It matches the `dish_images.dish_id`
@@ -116,6 +124,13 @@ Authentication endpoints are mounted under `/api/auth`:
 
 Managers can create internal accounts with `POST /api/users/staff` using a
 Bearer token and `{ "full_name", "email", "password", "role": "phuc_vu|thu_ngan|kitchen|manager" }`.
+
+Customers can manage their own refund bank accounts with
+`GET/POST /api/users/me/refund-bank-accounts`,
+`PUT/DELETE /api/users/me/refund-bank-accounts/:id`. When requesting an eligible
+deposit refund, `PATCH /api/reservations/:id/cancel` accepts the selected
+`refund_bank_account_id`; the chosen account details are snapshotted on the
+deposit for the manager to process.
 
 ## Bill Payment
 

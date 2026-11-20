@@ -266,9 +266,7 @@ async function cancelMyReservation(req, res, next) {
     const result = await reservationModel.cancelReservation(req.params.id, {
       actor: 'customer',
       userId: req.user.id,
-      refundBankCode: req.body.refund_bank_code,
-      refundAccountNumber: req.body.refund_account_number,
-      refundAccountName: req.body.refund_account_name,
+      refundBankAccountId: req.body.refund_bank_account_id,
       acceptForfeiture: req.body.accept_forfeiture === true,
     });
     if (result.refundEligible) {
