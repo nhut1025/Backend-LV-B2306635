@@ -155,7 +155,7 @@ async function transferTables({ reservationId = null, sourceTableId = null, targ
     const lockedTables = [];
     for (const id of lockIds) {
       const [rows] = await conn.query(
-        `SELECT id, table_number, capacity, status, current_reservation_id
+        `SELECT id, table_number, capacity, status, current_reservation_id, is_active
          FROM restaurant_tables WHERE id = ? FOR UPDATE`,
         [id]
       );
@@ -163,6 +163,9 @@ async function transferTables({ reservationId = null, sourceTableId = null, targ
     }
     if (lockedTables.length !== lockIds.length) {
       throw createConflict('Một số bàn không tồn tại.', 404);
+    }
+    if (lockedTables.some((table) => Number(table.is_active) !== 1)) {
+      throw createConflict('Một hoặc nhiều bàn đã ngừng sử dụng.');
     }
     const tablesById = new Map(lockedTables.map((table) => [Number(table.id), table]));
     const linkedSourceIds = sourceIds;

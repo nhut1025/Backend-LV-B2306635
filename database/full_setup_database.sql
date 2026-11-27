@@ -294,6 +294,7 @@ CREATE TABLE IF NOT EXISTS restaurant_tables (
   locked_by INT UNSIGNED NULL,
   locked_until DATETIME NULL,
   current_reservation_id INT UNSIGNED NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
   FOREIGN KEY (locked_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

@@ -7,7 +7,7 @@ const MINIMUM_PREORDER_DEPOSIT = 50000;
 async function findFreeTables() {
   const [rows] = await pool.query(
     `SELECT id, table_number, capacity FROM restaurant_tables
-     WHERE status = 'trong' ORDER BY capacity ASC`
+     WHERE status = 'trong' AND is_active = 1 ORDER BY capacity ASC`
   );
   return rows;
 }
@@ -48,7 +48,7 @@ function validateReservationDateTime(reservationDate, reservationTime, openTime,
   }
 
   if (reservationTime < openTime || reservationTime > closeTime) {
-    const err = new Error(`Nhà hàng chỉ nhận đặt bàn trong khung giờ ${openTime}–${closeTime}.`);
+    const err = new Error(`Quán ăn chỉ nhận đặt bàn trong khung giờ ${openTime}–${closeTime}.`);
     err.status = 400;
     throw err;
   }
@@ -79,7 +79,7 @@ async function createHold(userId, {
     }
 
     const [lockedTables] = await conn.query(
-      `SELECT id, capacity, status FROM restaurant_tables WHERE id IN (?) FOR UPDATE`,
+      `SELECT id, capacity, status, is_active FROM restaurant_tables WHERE id IN (?) FOR UPDATE`,
       [tableIds]
     );
 
@@ -88,9 +88,9 @@ async function createHold(userId, {
       err.status = 404;
       throw err;
     }
-    const notFree = lockedTables.some((t) => t.status !== 'trong');
+    const notFree = lockedTables.some((t) => t.status !== 'trong' || Number(t.is_active) !== 1);
     if (notFree) {
-      const err = new Error('Bàn vừa được người khác giữ, vui lòng chọn lại.');
+      const err = new Error('Bàn vừa được người khác giữ hoặc đã ngừng sử dụng, vui lòng chọn lại.');
       err.status = 409;
       throw err;
     }
@@ -816,9 +816,9 @@ async function restoreStaffCancelledReservation(reservationId) {
 
     const originalTableIds = originalTableRows.map((table) => table.table_id);
     const [availableTables] = await conn.query(
-      `SELECT id, table_number, capacity, status, current_reservation_id
+      `SELECT id, table_number, capacity, status, current_reservation_id, is_active
        FROM restaurant_tables
-       WHERE status = 'trong' OR id IN (?)
+       WHERE (status = 'trong' AND is_active = 1) OR id IN (?)
        FOR UPDATE`,
       [originalTableIds]
     );
@@ -827,11 +827,13 @@ async function restoreStaffCancelledReservation(reservationId) {
     );
     let restoredTables;
     if (originalTables.length === originalTableIds.length
-      && originalTables.every((table) => table.status === 'trong' && table.current_reservation_id === null)) {
+      && originalTables.every((table) => Number(table.is_active) === 1
+        && table.status === 'trong' && table.current_reservation_id === null)) {
       restoredTables = originalTables;
     } else {
       restoredTables = suggestTableCombo(
-        availableTables.filter((table) => table.status === 'trong' && table.current_reservation_id === null),
+        availableTables.filter((table) => Number(table.is_active) === 1
+          && table.status === 'trong' && table.current_reservation_id === null),
         reservationRows[0].party_size
       );
     }

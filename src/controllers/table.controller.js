@@ -93,8 +93,11 @@ async function remove(req, res, next) {
       return res.status(409).json({ message: 'Chỉ có thể xoá bàn đang ở trạng thái "trong".' });
     }
 
-    await tableModel.remove(id);
-    res.json({ message: 'Đã xoá bàn.' });
+    const [result] = await tableModel.deactivate(id);
+    if (result.affectedRows === 0) {
+      return res.status(409).json({ message: 'Bàn không còn trống hoặc đã ngừng sử dụng.' });
+    }
+    res.json({ message: 'Đã ngừng sử dụng bàn.' });
   } catch (err) {
     next(err);
   }

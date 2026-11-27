@@ -17,13 +17,18 @@ async function getOrCreateOpenBill(tableId) {
     await conn.beginTransaction();
 
     const [initialTableRows] = await conn.query(
-      `SELECT id, status, current_reservation_id
+      `SELECT id, status, current_reservation_id, is_active
        FROM restaurant_tables WHERE id = ?`,
       [tableId]
     );
     if (initialTableRows.length === 0) {
       const err = new Error('Không tìm thấy bàn.');
       err.status = 404;
+      throw err;
+    }
+    if (Number(initialTableRows[0].is_active) !== 1) {
+      const err = new Error('Bàn đã ngừng sử dụng.');
+      err.status = 409;
       throw err;
     }
 
@@ -43,14 +48,14 @@ async function getOrCreateOpenBill(tableId) {
 
       const [groupTables] = await conn.query(
         `SELECT id FROM restaurant_tables
-         WHERE current_reservation_id = ? AND status = 'co_khach'
+         WHERE current_reservation_id = ? AND status = 'co_khach' AND is_active = 1
          ORDER BY id`,
         [reservationId]
       );
       const lockedGroupTables = [];
       for (const table of groupTables) {
         const [rows] = await conn.query(
-          `SELECT id, status, current_reservation_id
+          `SELECT id, status, current_reservation_id, is_active
            FROM restaurant_tables WHERE id = ? FOR UPDATE`,
           [table.id]
         );
@@ -71,7 +76,7 @@ async function getOrCreateOpenBill(tableId) {
       representativeTableId = Math.min(...lockedGroupTables.map((table) => Number(table.id)));
     } else {
       const [lockedTableRows] = await conn.query(
-        `SELECT id, status, current_reservation_id
+        `SELECT id, status, current_reservation_id, is_active
          FROM restaurant_tables WHERE id = ? FOR UPDATE`,
         [tableId]
       );

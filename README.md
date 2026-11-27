@@ -31,6 +31,11 @@ On an existing database, run `database/v23_user_refund_bank_accounts_migration.s
 once to enable customers to save and select bank accounts for deposit refunds.
 New installations include the table in `database/full_setup_database.sql`.
 
+On an existing database, run `database/v24_table_deactivation_migration.sql` once.
+It adds an active flag so tables can be removed from operation without breaking
+historical bills. New installations include this column in
+`database/full_setup_database.sql`.
+
 For multiple dish images, also run `database/v10_dish_images_migration.sql`
 once after the categories migration. It matches the `dish_images.dish_id`
 type to the existing `dishes.id` type, including its signed/unsigned setting.

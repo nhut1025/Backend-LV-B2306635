@@ -2,7 +2,7 @@ const { pool } = require('../config/db');
 
 async function findAll() {
   const [rows] = await pool.query(
-    'SELECT id, table_number, capacity, status FROM restaurant_tables ORDER BY table_number'
+    'SELECT id, table_number, capacity, status FROM restaurant_tables WHERE is_active = 1 ORDER BY table_number'
   );
   return rows;
 }
@@ -13,13 +13,17 @@ async function findAllOperational() {
             r.party_size AS current_reservation_party_size
      FROM restaurant_tables t
      LEFT JOIN reservations r ON r.id = t.current_reservation_id
+     WHERE t.is_active = 1
      ORDER BY t.table_number`
   );
   return rows;
 }
 
 async function findById(id) {
-  const [rows] = await pool.query('SELECT * FROM restaurant_tables WHERE id = ?', [id]);
+  const [rows] = await pool.query(
+    'SELECT * FROM restaurant_tables WHERE id = ? AND is_active = 1',
+    [id]
+  );
   return rows;
 }
 
@@ -32,18 +36,26 @@ async function create(tableNumber, capacity) {
 
 async function update(id, tableNumber, capacity) {
   return pool.query(
-    'UPDATE restaurant_tables SET table_number = ?, capacity = ? WHERE id = ?',
+    'UPDATE restaurant_tables SET table_number = ?, capacity = ? WHERE id = ? AND is_active = 1',
     [tableNumber, capacity, id]
   );
 }
 
 async function findStatusById(id) {
-  const [rows] = await pool.query('SELECT status FROM restaurant_tables WHERE id = ?', [id]);
+  const [rows] = await pool.query(
+    'SELECT status FROM restaurant_tables WHERE id = ? AND is_active = 1',
+    [id]
+  );
   return rows;
 }
 
-async function remove(id) {
-  return pool.query('DELETE FROM restaurant_tables WHERE id = ?', [id]);
+async function deactivate(id) {
+  return pool.query(
+    `UPDATE restaurant_tables
+     SET is_active = 0
+     WHERE id = ? AND status = 'trong' AND is_active = 1`,
+    [id]
+  );
 }
 
 // ===== Phase 4: vận hành nhân viên phục vụ =====
@@ -52,7 +64,7 @@ async function assignWalkIn(id) {
   return pool.query(
     `UPDATE restaurant_tables
      SET status = 'co_khach', locked_by = NULL, locked_until = NULL, current_reservation_id = NULL
-     WHERE id = ? AND status = 'trong'`,
+     WHERE id = ? AND status = 'trong' AND is_active = 1`,
     [id]
   );
 }
@@ -122,7 +134,7 @@ module.exports = {
   create,
   update,
   findStatusById,
-  remove,
+  deactivate,
   assignWalkIn,
   releaseTable,
 };
