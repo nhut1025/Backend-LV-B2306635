@@ -13,12 +13,15 @@ async function authMiddleware(req, res, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
 
-    const [rows] = await pool.query('SELECT is_active FROM users WHERE id = ?', [payload.id]);
+    const [rows] = await pool.query(
+      'SELECT role, is_active FROM users WHERE id = ?',
+      [payload.id]
+    );
     if (rows.length === 0 || rows[0].is_active === false || rows[0].is_active === 0) {
       return res.status(401).json({ message: 'Tài khoản đã bị khóa hoặc không tồn tại.' });
     }
 
-    req.user = payload;
+    req.user = { ...payload, role: rows[0].role };
     next();
   } catch (err) {
     return res.status(401).json({ message: 'Token không hợp lệ hoặc đã hết hạn.' });

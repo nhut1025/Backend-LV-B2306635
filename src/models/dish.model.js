@@ -90,7 +90,7 @@ async function findById(id) {
   return { dishResult, ingredientResult, imageResult, tagResult };
 }
 
-async function findPublicReviewsByDishId(dishId) {
+async function findPublicReviewsByDishId(dishId, currentUserId = null) {
   const [dishRows] = await pool.query('SELECT id FROM dishes WHERE id = ?', [dishId]);
   if (dishRows.length === 0) return null;
 
@@ -108,17 +108,20 @@ async function findPublicReviewsByDishId(dishId) {
   );
   const [reviews] = await pool.query(
     `SELECT br.id, bri.id AS feedback_id, br.comment, br.created_at, bri.sentiment,
-            br.manager_reply, br.replied_at, manager.full_name AS manager_name
+            br.manager_reply, br.replied_at, manager.full_name AS manager_name,
+            reviewer.full_name AS reviewer_name,
+            CASE WHEN ? IS NOT NULL AND br.user_id = ? THEN TRUE ELSE FALSE END AS is_mine
      FROM bill_review_items bri
      JOIN bill_items bi ON bi.id = bri.bill_item_id
      JOIN bill_reviews br ON br.id = bri.bill_review_id
      JOIN bills b ON b.id = br.bill_id AND b.status = 'da_thanh_toan'
      JOIN reservations r ON r.id = b.reservation_id AND r.user_id = br.user_id
      LEFT JOIN users manager ON manager.id = br.replied_by
+     LEFT JOIN users reviewer ON reviewer.id = br.user_id
      WHERE bi.dish_id = ? AND bi.deleted_at IS NULL
      ORDER BY br.created_at DESC, br.id DESC
      LIMIT 30`,
-    [dishId]
+    [currentUserId, currentUserId, dishId]
   );
 
   return {

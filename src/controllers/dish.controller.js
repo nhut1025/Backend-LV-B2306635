@@ -208,7 +208,7 @@ async function getPublicReviews(req, res, next) {
       return res.status(400).json({ message: 'ID món ăn không hợp lệ.' });
     }
 
-    const result = await dishModel.findPublicReviewsByDishId(id);
+    const result = await dishModel.findPublicReviewsByDishId(id, req.user?.role === 'customer' ? req.user.id : null);
     if (!result) {
       return res.status(404).json({ message: 'Không tìm thấy món ăn.' });
     }

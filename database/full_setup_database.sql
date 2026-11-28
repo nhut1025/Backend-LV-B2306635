@@ -466,6 +466,7 @@ CREATE TABLE IF NOT EXISTS bills (
   payment_method ENUM('online','tien_mat') NULL,
   payment_code VARCHAR(100) NULL,
   paid_by INT UNSIGNED NULL,
+  paid_by_label VARCHAR(120) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   paid_at DATETIME NULL,
   INDEX idx_bills_payment_code (payment_code),
@@ -506,6 +507,15 @@ CREATE TABLE IF NOT EXISTS table_transfers (
 SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'bills' AND column_name = 'paid_by');
 SET @sql = IF(@col_exists = 0, "ALTER TABLE bills ADD COLUMN paid_by INT UNSIGNED NULL AFTER payment_code", 'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col_exists = (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'bills' AND column_name = 'paid_by_label');
+SET @sql = IF(@col_exists = 0, "ALTER TABLE bills ADD COLUMN paid_by_label VARCHAR(120) NULL AFTER paid_by", 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+UPDATE bills
+SET paid_by_label = 'SePay (tự động)'
+WHERE status = 'da_thanh_toan' AND payment_method = 'online'
+  AND paid_by IS NULL AND paid_by_label IS NULL;
 
 -- ============ 12. BILL_ITEMS ============
 CREATE TABLE IF NOT EXISTS bill_items (

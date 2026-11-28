@@ -120,6 +120,14 @@ async function listRestaurantReviews(req, res, next) {
   try {
     const rawRating = req.query.rating;
     const rawReplyStatus = req.query.reply_status;
+    const rawScope = req.query.scope;
+    let scope = 'all';
+    if (rawScope !== undefined) {
+      if (!['all', 'mine', 'replied', 'mine_replied'].includes(String(rawScope))) {
+        return res.status(400).json({ message: 'Bộ lọc đánh giá không hợp lệ.' });
+      }
+      scope = String(rawScope);
+    }
     let replyStatus = 'all';
     if (rawReplyStatus !== undefined) {
       if (!['all', 'replied', 'unreplied'].includes(String(rawReplyStatus))) {
@@ -150,6 +158,8 @@ async function listRestaurantReviews(req, res, next) {
     const result = await billModel.findRestaurantReviews({
       rating,
       replyStatus,
+      scope,
+      currentUserId: req.user?.role === 'customer' ? req.user.id : null,
       limit: perPage,
       offset,
     });

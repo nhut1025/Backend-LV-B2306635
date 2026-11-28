@@ -154,7 +154,7 @@ async function findMyPaidBillHistory(userId) {
     `SELECT b.id, b.table_id, t.table_number, b.reservation_id, b.total_amount,
             b.deposit_id, COALESCE(d.amount, 0) AS deposit_amount,
             b.payment_method, b.payment_code, b.created_at, b.paid_at,
-            b.paid_by AS cashier_id, cashier.full_name AS cashier_name,
+            b.paid_by AS cashier_id, COALESCE(cashier.full_name, b.paid_by_label) AS cashier_name,
             d.confirmed_by AS deposit_confirmed_by_id,
             deposit_cashier.full_name AS deposit_confirmed_by_name,
             br.id AS review_id, br.rating AS review_rating,
@@ -342,7 +342,7 @@ async function savePaidBillReview(
   }
 }
 
-async function findRestaurantReviews({ rating, replyStatus = 'all', limit, offset }) {
+async function findRestaurantReviews({ rating, replyStatus = 'all', scope = 'all', currentUserId = null, limit, offset }) {
   const [summaryRows] = await pool.query(
     `SELECT COUNT(*) AS review_count,
             COALESCE(AVG(br.rating), 0) AS average_rating,
@@ -365,24 +365,43 @@ async function findRestaurantReviews({ rating, replyStatus = 'all', limit, offse
      WHERE (? IS NULL OR br.rating = ? OR (? = 2 AND br.rating <= 2))
        AND (? = 'all'
          OR (? = 'replied' AND br.manager_reply IS NOT NULL AND TRIM(br.manager_reply) <> '')
-         OR (? = 'unreplied' AND (br.manager_reply IS NULL OR TRIM(br.manager_reply) = '')))`,
-    [rating, rating, rating, replyStatus, replyStatus, replyStatus]
+         OR (? = 'unreplied' AND (br.manager_reply IS NULL OR TRIM(br.manager_reply) = '')))
+       AND (? = 'all'
+         OR (? = 'mine' AND ? IS NOT NULL AND br.user_id = ?)
+         OR (? = 'replied' AND br.manager_reply IS NOT NULL AND TRIM(br.manager_reply) <> '')
+         OR (? = 'mine_replied' AND ? IS NOT NULL AND br.user_id = ?
+             AND br.manager_reply IS NOT NULL AND TRIM(br.manager_reply) <> ''))`,
+    [rating, rating, rating, replyStatus, replyStatus, replyStatus,
+     scope, scope, currentUserId, currentUserId,
+     scope, scope, currentUserId, currentUserId]
   );
   const [rows] = await pool.query(
     `    SELECT br.id, br.rating, br.food_rating, br.service_rating, br.ambience_rating,
            br.comment, br.created_at, br.updated_at, b.paid_at,
-           br.manager_reply, br.replied_at, manager.full_name AS manager_name
+           br.manager_reply, br.replied_at, manager.full_name AS manager_name,
+           reviewer.full_name AS reviewer_name,
+           CASE WHEN ? IS NOT NULL AND br.user_id = ? THEN TRUE ELSE FALSE END AS is_mine
     FROM bill_reviews br
     JOIN bills b ON b.id = br.bill_id AND b.status = 'da_thanh_toan'
     JOIN reservations r ON r.id = b.reservation_id AND r.user_id = br.user_id
     LEFT JOIN users manager ON manager.id = br.replied_by
+    LEFT JOIN users reviewer ON reviewer.id = br.user_id
      WHERE (? IS NULL OR br.rating = ? OR (? = 2 AND br.rating <= 2))
        AND (? = 'all'
          OR (? = 'replied' AND br.manager_reply IS NOT NULL AND TRIM(br.manager_reply) <> '')
          OR (? = 'unreplied' AND (br.manager_reply IS NULL OR TRIM(br.manager_reply) = '')))
+       AND (? = 'all'
+         OR (? = 'mine' AND ? IS NOT NULL AND br.user_id = ?)
+         OR (? = 'replied' AND br.manager_reply IS NOT NULL AND TRIM(br.manager_reply) <> '')
+         OR (? = 'mine_replied' AND ? IS NOT NULL AND br.user_id = ?
+             AND br.manager_reply IS NOT NULL AND TRIM(br.manager_reply) <> ''))
      ORDER BY br.created_at DESC, br.id DESC
      LIMIT ? OFFSET ?`,
-    [rating, rating, rating, replyStatus, replyStatus, replyStatus, limit, offset]
+    [currentUserId, currentUserId,
+     rating, rating, rating, replyStatus, replyStatus, replyStatus,
+     scope, scope, currentUserId, currentUserId,
+     scope, scope, currentUserId, currentUserId,
+     limit, offset]
   );
   return {
     summary: {
@@ -922,13 +941,16 @@ async function payBill(billId, paymentMethod, cashierId) {
     }
 
     const paymentCode = paymentMethod === 'online' ? `BILL${billId}` : null;
-        await conn.query(
+    const paidByLabel = cashierId == null && paymentMethod === 'online'
+      ? 'SePay (tự động)'
+      : null;
+    await conn.query(
       `UPDATE bills
        SET status = 'da_thanh_toan', total_amount = ?, deposit_id = ?, payment_method = ?, payment_code = ?,
-           paid_at = NOW(), paid_by = ?
+           paid_at = NOW(), paid_by = ?, paid_by_label = ?
        WHERE id = ?`,
-      [summary.subtotal, summary.deposit_id, paymentMethod, paymentCode, cashierId, billId]
-    );  
+      [summary.subtotal, summary.deposit_id, paymentMethod, paymentCode, cashierId, paidByLabel, billId]
+    );
 
     let remainingOpenBills = 0;
     if (bill.reservation_id) {

@@ -57,7 +57,7 @@ async function listBills({ from, to, tableId, cashierId, paymentMethod }) {
             END AS total_amount,
             CASE WHEN d.status IN ('da_coc', 'da_tru_bill') THEN COALESCE(d.amount, 0) ELSE 0 END AS deposit_amount,
             b.payment_method, b.payment_code,
-            b.paid_by AS cashier_id, u.full_name AS cashier_name,
+            b.paid_by AS cashier_id, COALESCE(u.full_name, b.paid_by_label) AS cashier_name,
             (SELECT COUNT(*) FROM bill_items bi WHERE bi.bill_id = b.id AND bi.deleted_at IS NULL) AS item_count
      FROM bills b
      JOIN restaurant_tables t ON t.id = b.table_id
@@ -106,7 +106,7 @@ async function listCashierPaymentHistory({ from, to, search, paymentMethod, limi
             b.total_amount,
             CASE WHEN d.status IN ('da_coc', 'da_tru_bill') THEN COALESCE(d.amount, 0) ELSE 0 END AS deposit_amount,
             b.payment_method, b.payment_code,
-            b.paid_by AS cashier_id, u.full_name AS cashier_name,
+            b.paid_by AS cashier_id, COALESCE(u.full_name, b.paid_by_label) AS cashier_name,
             (SELECT COUNT(*) FROM bill_items bi
              WHERE bi.bill_id = b.id AND bi.deleted_at IS NULL) AS item_count
      FROM bills b
@@ -263,7 +263,7 @@ async function findBillDetail(billId, paidOnly = false) {
             b.status, b.total_amount,
             CASE WHEN d.status IN ('da_coc', 'da_tru_bill') THEN COALESCE(d.amount, 0) ELSE 0 END AS deposit_amount,
             b.payment_method, b.payment_code,
-            b.paid_by AS cashier_id, u.full_name AS cashier_name,
+            b.paid_by AS cashier_id, COALESCE(u.full_name, b.paid_by_label) AS cashier_name,
             d.confirmed_by AS deposit_confirmed_by_id, du.full_name AS deposit_confirmed_by_name
      FROM bills b
      JOIN restaurant_tables t ON t.id = b.table_id

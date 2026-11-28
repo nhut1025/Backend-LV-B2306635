@@ -3,10 +3,11 @@ const router = express.Router();
 
 const ctrl = require('../controllers/bill.controller');
 const { authMiddleware, requireRole } = require('../middlewares/auth.middleware');
+const { optionalAuthMiddleware } = require('../middlewares/optionalAuth.middleware');
 
 router.post('/sepay/webhook', ctrl.sepayWebhook);
 router.get('/my-history', authMiddleware, requireRole('customer'), ctrl.listMyHistory);
-router.get('/reviews', ctrl.listRestaurantReviews);
+router.get('/reviews', optionalAuthMiddleware, ctrl.listRestaurantReviews);
 router.put('/reviews/:reviewId/reply', authMiddleware, requireRole('manager'), ctrl.replyToBillReview);
 router.post('/:billId/review', authMiddleware, requireRole('customer'), ctrl.createBillReview);
 router.put('/:billId/review', authMiddleware, requireRole('customer'), ctrl.updateBillReview);

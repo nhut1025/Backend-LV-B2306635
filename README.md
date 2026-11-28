@@ -36,6 +36,10 @@ It adds an active flag so tables can be removed from operation without breaking
 historical bills. New installations include this column in
 `database/full_setup_database.sql`.
 
+On an existing database, run `database/v25_bill_payment_actor_label_migration.sql`
+once to store the payment actor label for automatically confirmed bills. New
+installations include this field in `database/full_setup_database.sql`.
+
 For multiple dish images, also run `database/v10_dish_images_migration.sql`
 once after the categories migration. It matches the `dish_images.dish_id`
 type to the existing `dishes.id` type, including its signed/unsigned setting.
@@ -185,6 +189,7 @@ page. The cashier-only `GET /api/finance/payment-history` endpoint supports date
 payment-method, and bill/table/payment-code search filters, and
 `GET /api/finance/payment-history/:billId` returns the paid bill details. This is
 bill-level payment history; the bank/SePay transaction reference is not stored.
+SePay-confirmed online bills record **SePay (tự động)** as the payment actor.
 
 ### Chạy script tạo bill mô phỏng
 
